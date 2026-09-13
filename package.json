@@ -1,0 +1,9 @@
+{
+  "name": "fedledger-blockchain",
+  "version": "1.0.0",
+  "description": "Hardhat Ethereum environment for FedLedger",
+  "devDependencies": {
+    "hardhat": "^2.19.0",
+    "@nomicfoundation/hardhat-toolbox": "^3.0.0"
+  }
+}

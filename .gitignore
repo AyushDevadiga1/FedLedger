@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Generated dataset partitions (created by data/generate_partitions.py)
+data/node*/X.npy
+data/node*/y.npy
+
+# Node.js / Hardhat
+node_modules/
+blockchain/artifacts/
+blockchain/cache/
+blockchain/typechain-types/
+
+# Local tooling
+.qodo/
