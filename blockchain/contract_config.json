@@ -1,0 +1,4 @@
+{
+  "contract_address": "REPLACE_WITH_DEPLOYED_CONTRACT_ADDRESS",
+  "abi_path": "./artifacts/contracts/FLAuditLog.sol/FLAuditLog.json"
+}
