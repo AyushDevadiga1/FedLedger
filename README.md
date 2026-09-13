@@ -2,9 +2,6 @@
 
 **Federated Learning with Blockchain Audit Trail**
 
-Blockchain Technology Mini-Project — Mumbai University C-Scheme
-B.E. Computer Science (AI & ML) | Bharat College of Engineering
-
 Three organisations train a shared ML model using Federated Learning without
 sharing raw data. After every training round, a permanent Ethereum transaction
 records the round number, accuracy, participants, and a SHA-256 hash of the
@@ -12,8 +9,6 @@ aggregated model weights — a tamper-proof, independently verifiable audit trai
 of the whole training process.
 
 **Stack:** Python · Flower (flwr) · scikit-learn · Hardhat · Solidity · web3.py · Streamlit
-**Cost:** Rs. 0 | **GPU:** not needed | **Internet:** not needed (local Hardhat node)
-
 ---
 
 ## Modules
@@ -65,6 +60,3 @@ FedLedger/
 ```
 
 ---
-
-Every file carries `TODO` markers describing exactly what to implement —
-each module's skeleton is committed separately and implemented in order.
