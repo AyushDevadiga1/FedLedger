@@ -10,11 +10,14 @@ Prerequisites:
 """
 
 import json
+import os
 import hashlib
+
 from web3 import Web3
 from typing import List
 import numpy as np
 
+from fl_server.fedavg import compute_weight_hash
 
 class BlockchainLogger:
     """
@@ -35,7 +38,51 @@ class BlockchainLogger:
           5. Create contract instance: self.w3.eth.contract(address=..., abi=...)
           6. Set self.account = self.w3.eth.accounts[0] (Hardhat test account)
         """
-        pass
+        self.w3 = Web3(Web3.HTTPProvider('http://127.0.0.1:8545'))
+
+        assert self.w3.is_connected()
+
+        abs_config_path = self._get_absolute_path(config_path)
+
+        try:
+            with open(abs_config_path, 'r') as config_file:
+                config = json.load(config_file)
+        except FileNotFoundError:
+            raise FileNotFoundError(
+                f"Could not find config file at {os.path.abspath(abs_config_path)}. "
+                f"Current working directory is {os.getcwd()}"
+            )
+        except Exception as e:
+            raise RuntimeError(f"Failed to parse config JSON at {abs_config_path}. Error: {e}")
+            
+
+        abs_abi_path = self._get_absolute_path(config['abi_path'])
+
+        try:
+            with open(abs_abi_path,'r') as abi_file:
+                abi_json = json.load(abi_file)
+                abi = abi_json.get('abi',abi_json)
+        except FileNotFoundError:
+            raise FileNotFoundError(f"ABI file missing at: {abs_abi_path}")
+        except Exception as e:
+            raise RuntimeError(f"Failed to parse config JSON at {abs_config_path}. Error: {e}")
+
+        checksum_address = Web3.to_checksum_address(config['contract_address'])
+        
+        self.contract = self.w3.eth.contract(address=checksum_address, abi=abi)
+        self.account = self.w3.eth.accounts[0]
+
+    def _get_absolute_path(self, target_path: str) -> str:
+
+        """Helper function to resolve relative paths against the project root."""
+        if os.path.isabs(target_path):
+            return target_path
+            
+        # Locate logger.py directory, then move up one level to the project root
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        project_root = os.path.dirname(script_dir)
+        
+        return os.path.join(project_root, target_path)   
 
     def log_round(
         self,
@@ -74,7 +121,24 @@ class BlockchainLogger:
           5. Wait for receipt: self.w3.eth.wait_for_transaction_receipt(tx_hash)
           6. Return tx_hash.hex()
         """
-        pass
+
+        weight_hash = compute_weight_hash(global_weights)
+
+        accuracy_int = int(accuracy*1000) # In 1000s - so sol can handle this
+
+        weight_hash_bytes = self.w3.keccak(text=weight_hash)
+
+        tx_hash = self.contract.functions.logRound(
+                 round_number,
+                 accuracy_int,
+                 participants,
+                 weight_hash_bytes
+            ).transact({'from': self.account}) # Eth account 
+
+        self.w3.eth.wait_for_transaction_receipt(tx_hash) # Wait for mining
+
+        return tx_hash.hex() # human-readable hex
+
 
     def get_round(self, round_index: int) -> dict:
         """
@@ -93,14 +157,25 @@ class BlockchainLogger:
           3. Convert accuracy integer back to float: accuracy / 1000
           4. Return the dict
         """
-        pass
+
+        raw_round_data = self.contract.functions.getRound(round_index).call()
+        
+        round_dict = {
+            "roundNumber": raw_round_data[0],
+            "accuracy": raw_round_data[1] / 1000, # 3. Convert accuracy integer back to float
+            "participants": raw_round_data[2],
+            "modelHash": raw_round_data[3].hex() if isinstance(raw_round_data[3], bytes) else raw_round_data[3],
+            "timestamp": raw_round_data[4]
+        }
+
+        return round_dict
 
     def total_rounds(self) -> int:
         """
         Return total number of rounds logged on-chain.
         TODO: call self.contract.functions.totalRounds().call()
         """
-        pass
+        return self.contract.functions.totalRounds().call()
 
     def verify_round(self, round_index: int, weights_to_verify: List[np.ndarray]) -> bool:
         """
@@ -120,4 +195,25 @@ class BlockchainLogger:
           3. Compare recomputed hash to stored modelHash
           4. Return True if match, False if mismatch
         """
-        pass
+        
+        stored_round = self.get_round(round_index)
+        stored_hash = stored_round["modelHash"]
+
+        calc_weight_hash = compute_weight_hash(weights_to_verify)
+        calc_weight_hash_bytes = self.w3.keccak(text=calc_weight_hash)
+
+        calc_weight_hash_hex = calc_weight_hash_bytes.hex()
+
+        # Handle cases where get_round might return a string with or without the '0x' prefix
+        if not stored_hash.startswith("0x"):
+            stored_hash = "0x" + stored_hash
+        if not calc_weight_hash_hex.startswith("0x"):
+            calc_weight_hash_hex = "0x" + calc_weight_hash_hex
+
+        # Compare recomputed hash to stored modelHash and return outcome
+        if calc_weight_hash_hex == stored_hash:
+            print(f"✅ Round {round_index} Integrity Verified! Hashes match.")
+            return True
+        else:
+            print(f"❌ WARNING: Tampering detected for Round {round_index}! Hashes mismatch.")
+            return False        
