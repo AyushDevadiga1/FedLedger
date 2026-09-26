@@ -41,8 +41,28 @@ def federated_average(
         2. For each layer index, compute weighted average across all nodes
         3. Return list of averaged weight arrays
     """
-    pass
 
+    total_samples = sum(sample_counts)
+
+    has_intercept = len(weights_list[0]) > 1
+    
+    federeated_sum_weight = np.zeros_like(weights_list[0][0],dtype=np.float64)
+    if has_intercept : 
+      federeated_sum_intercept = np.zeros_like(weights_list[0][1],dtype=np.float64)
+
+    for sample_count,weight_list in zip(sample_counts,weights_list):
+      federeated_sum_weight += sample_count*weight_list[0]
+      if has_intercept:
+        federeated_sum_intercept += sample_count*weight_list[1]
+
+    federated_weight_avg = federeated_sum_weight/total_samples
+
+    if has_intercept:
+      federated_intercept_avg = federeated_sum_intercept/total_samples
+      return [federated_weight_avg, federated_intercept_avg]
+
+    return [federated_weight_avg,]
+      
 
 def compute_weight_hash(global_weights: List[np.ndarray]) -> str:
     """
@@ -65,4 +85,14 @@ def compute_weight_hash(global_weights: List[np.ndarray]) -> str:
         3. Compute hashlib.sha256(json.dumps(weights_as_list).encode()).hexdigest()
         4. Return hex string
     """
-    pass
+
+    import hashlib
+    import json
+
+    weights_as_list = [
+        x.tolist() for x in global_weights
+    ]
+
+    hex_string = hashlib.sha256(json.dumps(weights_as_list).encode()).hexdigest()
+
+    return hex_string
