@@ -3,10 +3,18 @@ server.py
 FedLedger Flower server — orchestrates federated training.
 Runs FedAvg aggregation and logs every round to blockchain.
 
-Run with: python fl_server/server.py
-Then start nodes: python fl_nodes/node1.py (in separate terminals)
+Run with: python -m fl_server.server --rounds 10
+Then start nodes: python fl_nodes/node.py --node 1 (in separate terminals)
+
+Imports are package-absolute (fl_server.*) because blockchain_logger.py does
+the same. Running this as a plain script from inside fl_server/ puts only
+fl_server/ on sys.path, so `fl_server.fedavg` is unresolvable and the import
+chain breaks one level down. Launch it as a module from the repo root.
 """
+import argparse
 import hashlib
+import json
+import os
 
 import flwr as fl
 import numpy as np
@@ -17,6 +25,9 @@ from fl_server.fedavg import federated_average, compute_weight_hash
 from fl_server.blockchain_logger import BlockchainLogger
 
 from sklearn.linear_model import LogisticRegression
+
+# Path to JSON file the dashboard polls every 2 seconds
+_RESULTS_PATH = os.path.join(os.path.dirname(__file__), '..', 'app', 'round_results.json')
 
 
 # ── Global state ──────────────────────────────────────────────────────
@@ -45,6 +56,9 @@ class FedLedgerStrategy(fl.server.strategy.Strategy):
         self.num_rounds = num_rounds
         self.current_round = 0
         self.global_weights = None
+        # Initialise here — not lazily in aggregate_fit — so any code that
+        # reads self.round_results always gets a list, never an AttributeError.
+        self.round_results: list = []
 
         self.model = LogisticRegression(penalty="l2", max_iter=1, warm_start=True)
 
@@ -123,21 +137,25 @@ class FedLedgerStrategy(fl.server.strategy.Strategy):
         self.model.coef_ = self.global_weights[0]
         self.model.intercept_ = self.global_weights[1]
 
-        # 4. Process decentralized client accuracy metrics
-        client_accuracies = []
-        for _, fit_res in results:
-            if fit_res.metrics and "accuracy" in fit_res.metrics:
-                client_accuracies.append(fit_res.metrics["accuracy"])
-        
+        # 4. Average accuracy across all clients.
+        # sklearn.score() always returns a fraction in [0, 1], so we convert
+        # explicitly to percentage.  The old conditional guard
+        # (if accuracy <= 1.0: accuracy * 100) was fragile: if a future
+        # client ever sent a percentage directly the guard would silently
+        # skip the conversion.
+        client_accuracies = [
+            fit_res.metrics["accuracy"]
+            for _, fit_res in results
+            if fit_res.metrics and "accuracy" in fit_res.metrics
+        ]
         if client_accuracies:
-            accuracy = sum(client_accuracies) / len(client_accuracies)
-            if accuracy <= 1.0:
-                accuracy = accuracy * 100
+            accuracy = (sum(client_accuracies) / len(client_accuracies)) * 100
         else:
             raise RuntimeError(
                 f"❌ Round {server_round} Aggregation Failed: Clients did not report an 'accuracy' metric. "
                 f"Ensure client side fit() returns {{'accuracy': value}} in its metrics dictionary."
             )
+
 
         # 5. Call self.blockchain_logger.log_round with exact matching parameters
         tx_hash = "0x0"
@@ -151,13 +169,17 @@ class FedLedgerStrategy(fl.server.strategy.Strategy):
         except Exception as e:
             print(f"|| Blockchain Logging Transaction Failure: {e}")
 
-        # 6. Append metrics to round_results for dashboard tracking
-        if not hasattr(self, 'round_results'):
-            self.round_results = []
         self.round_results.append((server_round, accuracy, tx_hash))
 
         # 7. Print round summary to console
         print(f" Round {server_round} complete. Accuracy: {accuracy:.2f}%. Tx: {tx_hash}")
+
+        # Write results to JSON so the dashboard can read them
+        try:
+            with open(_RESULTS_PATH, 'w') as f:
+                json.dump(self.round_results, f)
+        except Exception as e:
+            print(f"[dashboard] Could not write round_results.json: {e}")
 
         # 8. Return (aggregated_parameters, {})
         aggregated_parameters = fl.common.ndarrays_to_parameters(self.global_weights)
@@ -225,6 +247,12 @@ def start_server(num_rounds: int = 10):
 
 
 if __name__ == "__main__":
-    print("Starting FedLedger server...")
+    # The launcher passes --rounds through; it used to be hardcoded here, so
+    # `run_fedledger.py --rounds 5` silently trained for 10.
+    parser = argparse.ArgumentParser(description='FedLedger Flower server')
+    parser.add_argument('--rounds', type=int, default=10)
+    cli = parser.parse_args()
+
+    print(f"Starting FedLedger server for {cli.rounds} rounds...")
     print("Waiting for 3 nodes to connect...")
-    start_server(num_rounds=10)
+    start_server(num_rounds=cli.rounds)
