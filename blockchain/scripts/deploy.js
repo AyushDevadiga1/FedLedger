@@ -26,11 +26,13 @@ async function main() {
      const contractAddress = await contract.getAddress(); 
      console.log("FLAuditLog deployed to:", contractAddress);
   
-  // 4. Save ABI and address to contract_config.json:
-     const artifactPath = path.join(__dirname, "../artifacts/contracts/FLAuditLog.sol/FLAuditLog.json");
+  // 4. Save ABI and address to contract_config.json.
+  //    Use a project-relative path so the config works on any machine
+  //    (path.join(__dirname, ...) would write a machine-absolute Windows
+  //    path that breaks on Linux/macOS and on any other developer's box).
      const config = {
        contract_address: contractAddress,
-       abi_path: artifactPath
+       abi_path: "blockchain/artifacts/contracts/FLAuditLog.sol/FLAuditLog.json"
      };
      fs.writeFileSync(
        path.join(__dirname, "../contract_config.json"),
