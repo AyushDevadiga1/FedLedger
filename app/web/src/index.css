@@ -1,0 +1,213 @@
+@import 'tailwindcss';
+
+/* ═══════════════════════════════════════════════════════════════════
+   PALETTE — verbatim from app/references/assets/color_scheme.txt.
+   Triplets are kept in the shadcn space-separated form so the file
+   stays diffable against the source. Two overrides are marked OVERRIDE
+   with the reason; everything else is untouched.
+   ═══════════════════════════════════════════════════════════════════ */
+:root {
+  --background: 24 12% 7%; /* dark obsidian base            #141110 */
+  --foreground: 30 10% 90%; /* soft silver-cream text        #e8e6e3 */
+
+  --card: 24 10% 10%; /* muted earthy container    #1c1917 */
+  --card-foreground: 30 10% 90%;
+
+  --popover: 24 10% 10%;
+  --popover-foreground: 30 10% 90%;
+
+  /* THE accent — decorative only, never used semantically */
+  --primary: 15 68% 62%; /* ember / terracotta          #e07d5c */
+  --primary-foreground: 24 12% 7%;
+
+  --secondary: 24 8% 16%; /* dusty slate brown           #2c2826 */
+  --secondary-foreground: 30 5% 85%;
+
+  --muted: 24 6% 14%; /* deep containment fill       #262322 */
+  --muted-foreground: 24 5% 65%; /* desaturated taupe #aaa5a1 */
+
+  --accent: 15 30% 18%; /* warm ambient hover fill     #3c2720 */
+  --accent-foreground: 15 68% 85%;
+
+  --destructive: 0 84% 60%; /*                      #ef4343 */
+  --destructive-foreground: 0 0% 98%;
+
+  --ring: 15 68% 62%;
+  --radius: 0.5rem;
+
+  /* ── OVERRIDE 1 — hairline visibility ────────────────────────────
+     Source --border is 24 7% 16% (#2c2826), which measures 1.29:1
+     against --background. At 1px that is invisible, and hairlines are
+     the only separation this layout has. Lifted to 22% => 1.60:1. */
+  --border: 24 7% 22%; /* source was 24 7% 16%            #3c3734 */
+  --border-strong: 24 7% 30%; /* active / focus lines        #524b47 */
+  --input: 24 7% 22%;
+
+  /* ── OVERRIDE 2 — the verified state has no colour ──────────────
+     The source palette ships a red but no green, so "match" and
+     "mismatch" would both land on warm hues and stop being
+     distinguishable. Muted jade, in the same register as terracotta. */
+  --verified: 145 32% 46%; /* 5.60:1 on background           #509b6f */
+  --verified-foreground: 145 40% 96%;
+
+  /* Third-level text. 3.27:1 — readable, clearly below the 7.7:1 of
+     --muted-foreground, so hierarchy survives without going too dim. */
+  --subtle: 24 5% 40%; /*  3.27:1                        #6b6561 */
+}
+
+@theme inline {
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+  --color-card: hsl(var(--card));
+  --color-card-foreground: hsl(var(--card-foreground));
+  --color-popover: hsl(var(--popover));
+  --color-popover-foreground: hsl(var(--popover-foreground));
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+  --color-secondary: hsl(var(--secondary));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+  --color-accent: hsl(var(--accent));
+  --color-accent-foreground: hsl(var(--accent-foreground));
+  --color-destructive: hsl(var(--destructive));
+  --color-destructive-foreground: hsl(var(--destructive-foreground));
+  --color-border: hsl(var(--border));
+  --color-border-strong: hsl(var(--border-strong));
+  --color-input: hsl(var(--input));
+  --color-ring: hsl(var(--ring));
+  --color-verified: hsl(var(--verified));
+  --color-verified-foreground: hsl(var(--verified-foreground));
+  --color-subtle: hsl(var(--subtle));
+
+  /* ── TYPE ────────────────────────────────────────────────────────
+     Deliberately NOT Inter. Inter is the default reach of every
+     generated dashboard, and pairing it with a mono is the single
+     loudest "this was AI-generated" tell. IBM Plex Sans was designed
+     for technical and institutional settings and carries real
+     character in the `a` and the flared stems.
+     JetBrains Mono is kept for hashes and figures because its slashed
+     zero is non-negotiable when the UI shows hex strings — `0x0` and
+     `0xo` must never be confusable. */
+  --font-sans:
+    'IBM Plex Sans', ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono:
+    'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+
+  /* Scale floor raised to 12px. The v1 dashboard ran down to 9px for
+     table meta and phase labels, which is why it read as cramped. */
+  --text-2xs: 0.75rem; /* 12px — smallest permitted */
+  --text-xs: 0.8125rem; /* 13px */
+  --text-sm: 0.875rem; /* 14px */
+  --text-base: 0.9375rem; /* 15px */
+
+  --radius-lg: var(--radius);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-sm: calc(var(--radius) - 4px);
+}
+
+@layer base {
+  * {
+    border-color: hsl(var(--border));
+  }
+
+  html {
+    color-scheme: dark;
+  }
+
+  body {
+    background-color: hsl(var(--background));
+    color: hsl(var(--foreground));
+    font-family: var(--font-sans);
+    font-size: 0.9375rem;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* Hashes and figures: tabular so columns of hex stay aligned. */
+  .font-mono,
+  code,
+  kbd {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: 'zero' 1;
+  }
+
+  ::selection {
+    background: hsl(var(--primary) / 0.28);
+  }
+
+  /* Focus is the one place a ring is allowed to be loud. */
+  :focus-visible {
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: 2px;
+  }
+}
+
+/* Motion is functional here — it shows a payload moving — so it gets a
+   shorter curve than a decorative transition and respects the OS
+   reduced-motion setting rather than fighting it. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* React Flow surface inherits the app's hairlines rather than shipping
+   its own grey defaults. */
+.react-flow__attribution {
+  display: none;
+}
+.react-flow__handle {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* Sandbox read indicator: one pass of a hairline across the drop zone while a
+   file is being read. A single sweep reads as "inspecting" where a pulsing
+   glow reads as "technology". Global reduced-motion rule above collapses it. */
+@keyframes fedledger-scan {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(100%);
+  }
+}
+
+.fedledger-scan::after {
+  content: '';
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: 0;
+  width: 2px;
+  background: hsl(var(--primary));
+  animation: fedledger-scan 900ms cubic-bezier(0.4, 0, 0.2, 1) 1;
+}
+
+/* A freshly sealed block drops into the chain and settles with one small
+   overshoot. The overshoot is what makes it read as being *placed* rather
+   than fading in place. */
+@keyframes fedledger-slot {
+  0% {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  60% {
+    opacity: 1;
+    transform: translateY(2px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.fedledger-slot {
+  animation: fedledger-slot 420ms cubic-bezier(0.34, 1.36, 0.64, 1) 1;
+}
+

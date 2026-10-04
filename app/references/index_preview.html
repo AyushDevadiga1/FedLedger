@@ -1,0 +1,502 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>FedLedger — Visual Preview (static mockup)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet"/>
+<style>
+/* ══════════════════════════════════════════════════════════════════
+   PALETTE — from app/references/assets/color_scheme.txt, verbatim.
+   Hex values are exact conversions of those HSL triplets; the triplets
+   are kept inline so the mapping stays auditable.
+   ══════════════════════════════════════════════════════════════════ */
+:root{
+  /* surfaces — flat, no glow */
+  --background:#141110;        /* 24 12% 7%   dark obsidian base        */
+  --foreground:#e8e6e3;        /* 30 10% 90%  soft silver-cream text    */
+  --card:#1c1917;              /* 24 10% 10%  muted earthy container    */
+  --card-fg:#e8e6e3;           /* 30 10% 90%                            */
+  --popover:#1c1917;           /* 24 10% 10%                            */
+  --popover-fg:#e8e6e3;        /* 30 10% 90%                            */
+
+  /* THE one accent — decorative use only, never semantic */
+  --primary:#e07d5c;           /* 15 68% 62%  ember / terracotta.
+                                    NB the palette's own comment says
+                                    #e07b5b, but the triplet resolves to
+                                    #e07d5c — trust the triplet, not the note */
+  --primary-fg:#141110;        /* 24 12% 7%   dark button label         */
+
+  --secondary:#2c2826;         /* 24 8% 16%   dusty slate brown         */
+  --secondary-fg:#dbd9d7;      /* 30 5% 85%                              */
+
+  --muted:#262322;             /* 24 6% 14%   deep containment fill     */
+  --muted-fg:#aaa5a1;          /* 24 5% 65%   desaturated taupe         */
+
+  --accent-hover:#3c2720;      /* 15 30% 18%  warm ambient hover fill   */
+  --accent-hover-fg:#f3ccbf;   /* 15 68% 85%                            */
+
+  --destructive:#ef4343;       /* 0 84% 60%                              */
+  --destructive-fg:#fafafa;    /* 0 0% 98%                               */
+
+  --ring:#e07d5c;              /* 15 68% 62%                             */
+  --radius:8px;                /* 0.5rem                                 */
+
+  /* ── DERIVED ──────────────────────────────────────────────────── */
+  --fg-muted:#aaa5a1;          /* = muted-foreground */
+  --fg-dim:#6b6561;            /* 24 5% 40% tertiary, 3.3:1 on background */
+
+  /* ── OVERRIDE 1 of 2 — hairline visibility ──────────────────────
+     Palette --border is 24 7% 16% (#2c2826), which measures 1.29:1
+     against --background. At 1px that is invisible, and hairlines are
+     the ONLY separation this design has. Lifted to 22% => 1.60:1. */
+  --border:#3c3734;            /* was 24 7% 16% */
+  --input:#3c3734;
+  --line-hi:#524b47;           /* 24 7% 30% — active/focus lines */
+
+  /* ── OVERRIDE 2 of 2 — verified state has no colour ─────────────
+     The palette ships a red (destructive) but no green. The design
+     contract reserves green=verified / red=mismatch, so without this
+     both states land on warm hues and stop being distinguishable.
+     Muted jade, chosen to sit in the same register as the terracotta. */
+  --ok:#509b6f;                /* 145 32% 46% */
+  --ok-dim:rgba(80,155,124,0.12);
+  --err:var(--destructive);
+  --err-dim:rgba(239,67,67,0.12);
+
+  --mono:'JetBrains Mono',ui-monospace,monospace;
+  --sans:'Inter',system-ui,sans-serif;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--background);color:var(--foreground);font-family:var(--sans);font-size:13px;line-height:1.5;-webkit-font-smoothing:antialiased}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.wrap{max-width:1440px;margin:0 auto;padding:0 24px 56px}
+
+/* ── STATUS BAR ───────────────────────────────────────────────── */
+.statusbar{display:flex;align-items:center;gap:20px;height:48px;border-bottom:1px solid var(--border);margin-bottom:20px;position:sticky;top:0;background:var(--background);z-index:20}
+.brand{display:flex;align-items:baseline;gap:9px}
+.brand-mark{font-family:var(--mono);font-weight:600;font-size:14px;letter-spacing:-.02em}
+.brand-sub{font-size:11px;color:var(--fg-dim)}
+.svc{display:flex;align-items:center;gap:6px;font-family:var(--mono);font-size:10px;color:var(--fg-muted)}
+.dot{width:5px;height:5px;border-radius:50%;background:var(--fg-dim);flex-shrink:0}
+.dot.on{background:var(--ok)} .dot.off{background:var(--err)}
+.spacer{flex:1}
+.round-chip{font-family:var(--mono);font-size:10px;color:var(--fg-muted);border:1px solid var(--line-hi);padding:2px 8px}
+.round-chip b{color:var(--foreground);font-weight:500}
+
+/* ── STAT STRIP — shown once, not repeated per view ───────────── */
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--border);border:1px solid var(--border);margin-bottom:20px;border-radius:var(--radius);overflow:hidden}
+.stat{background:var(--card);padding:12px 14px}
+.stat-v{font-family:var(--mono);font-size:22px;font-weight:600;line-height:1.1}
+.stat-l{font-size:10px;color:var(--fg-muted);margin-top:3px}
+.v-ok{color:var(--ok)} .v-err{color:var(--err)} .v-acc{color:var(--primary)}
+
+/* ── MAIN GRID ────────────────────────────────────────────────── */
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:20px}
+@media(max-width:1100px){.grid{grid-template-columns:1fr}}
+.panel{background:var(--card);border:1px solid var(--border);border-radius:var(--radius)}
+.panel-head{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid var(--border)}
+.panel-title{font-size:11px;font-weight:500}
+.panel-note{font-family:var(--mono);font-size:10px;color:var(--fg-dim)}
+.panel-body{padding:14px}
+
+/* ── FEDERATION DIAGRAM ───────────────────────────────────────── */
+.diagram{width:100%;display:block}
+.node-box,.server-box,.chain-box{fill:var(--secondary);stroke:var(--border);stroke-width:1}
+.node-label{fill:var(--foreground);font-family:var(--mono);font-size:11px;font-weight:500}
+.node-sub{fill:var(--fg-dim);font-family:var(--mono);font-size:9px}
+.edge{fill:none;stroke:var(--line-hi);stroke-width:1;stroke-dasharray:3 3}
+.edge-live{fill:none;stroke:var(--primary);stroke-width:1.5}
+.packet{fill:var(--primary)}
+.packet-dist{fill:var(--ok)}
+.edge-label{fill:var(--fg-muted);font-family:var(--mono);font-size:8.5px}
+.pin{fill:var(--fg-dim);font-family:var(--mono);font-size:8.5px}
+.value-acc{fill:var(--primary);font-family:var(--mono);font-size:11px;font-weight:600}
+
+/* per-step diagram states */
+.d-train .org{stroke:var(--primary)}
+.d-send  .edge-live{stroke:var(--primary)}
+.d-agg   .server{stroke:var(--primary)}
+.d-seal  .chain{stroke:var(--primary)}
+.d-dist  .edge-dist{stroke:var(--ok)}
+
+/* ── SCRUBBER ─────────────────────────────────────────────────── */
+.scrub{border-top:1px solid var(--border);padding:12px 14px;display:flex;flex-direction:column;gap:9px}
+.steps{display:flex;gap:1px;background:var(--border);border:1px solid var(--border);border-radius:4px;overflow:hidden}
+.step-btn{flex:1;background:var(--card);border:none;color:var(--fg-dim);font-family:var(--mono);font-size:9.5px;padding:7px 4px;cursor:pointer;transition:color .15s,background .15s}
+.step-btn:hover{color:var(--fg-muted);background:var(--secondary)}
+.step-btn.active{color:var(--foreground);background:var(--secondary);box-shadow:inset 0 -2px 0 var(--primary)}
+.step-desc{font-family:var(--mono);font-size:10px;color:var(--fg-muted);min-height:15px}
+
+/* ── LEDGER TABLE ─────────────────────────────────────────────── */
+table{width:100%;border-collapse:collapse}
+th{font-family:var(--mono);font-size:9.5px;font-weight:500;color:var(--fg-dim);text-align:left;text-transform:uppercase;letter-spacing:.06em;padding:7px 8px;border-bottom:1px solid var(--border)}
+td{font-family:var(--mono);font-size:10.5px;padding:8px;border-bottom:1px solid var(--border);color:var(--fg-muted)}
+tr:last-child td{border-bottom:none}
+tr.row-new td{background:var(--muted)}
+td.rnd{color:var(--foreground)}
+td.acc{color:var(--primary)}
+.hash{color:var(--fg-dim)}
+.dash{color:var(--fg-dim)}
+.tag{display:inline-block;font-size:9px;padding:1px 5px;border:1px solid var(--line-hi);color:var(--fg-dim);border-radius:3px}
+.tag.ok{color:var(--ok);border-color:var(--ok);background:var(--ok-dim)}
+.tag.err{color:var(--err);border-color:var(--err);background:var(--err-dim)}
+.tag.cur{color:var(--primary);border-color:var(--primary)}
+.copy{border:1px solid var(--line-hi);background:none;color:var(--fg-dim);font-family:var(--mono);font-size:9px;padding:1px 5px;cursor:pointer;margin-left:6px;border-radius:3px}
+.copy:hover{color:var(--foreground);border-color:var(--fg-muted)}
+
+/* ── CHART ────────────────────────────────────────────────────── */
+.chart{width:100%;height:170px;display:block}
+.c-line{fill:none;stroke:var(--primary);stroke-width:1.5;stroke-linejoin:round;stroke-linecap:round}
+.c-dot{fill:var(--card);stroke:var(--primary);stroke-width:1.5}
+.c-grid{stroke:var(--border);stroke-width:1}
+.c-lbl{fill:var(--fg-dim);font-family:var(--mono);font-size:8.5px}
+.chart-note{font-size:10px;color:var(--fg-dim);margin-top:8px;padding-top:8px;border-top:1px solid var(--border)}
+.chart-note b{color:var(--fg-muted);font-weight:500}
+
+/* ── VERIFY ───────────────────────────────────────────────────── */
+.verify-grid{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+@media(max-width:900px){.verify-grid{grid-template-columns:1fr}}
+.field{margin-bottom:12px}
+.field label{display:block;font-size:10px;color:var(--fg-muted);margin-bottom:5px}
+.field input,.field textarea{width:100%;background:var(--background);border:1px solid var(--input);color:var(--foreground);font-family:var(--mono);font-size:11px;padding:7px 9px;outline:none;border-radius:4px}
+.field textarea{height:78px;resize:none;line-height:1.6}
+.field input:focus,.field textarea:focus{border-color:var(--ring);box-shadow:0 0 0 2px rgba(224,125,92,0.18)}
+.hint{font-size:10px;color:var(--fg-dim);margin-top:4px;line-height:1.6}
+.hint b{color:var(--fg-muted);font-weight:500}
+.btn{display:inline-flex;align-items:center;gap:7px;background:var(--primary);border:1px solid var(--primary);color:var(--primary-fg);font-family:var(--mono);font-size:11px;font-weight:500;padding:7px 15px;cursor:pointer;border-radius:4px}
+.btn.ghost{background:none;color:var(--fg-muted);border-color:var(--line-hi)}
+.btn.ghost:hover{color:var(--foreground);border-color:var(--fg-muted)}
+/* side-by-side hash comparison — the core of claim 3 */
+.cmp{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--border);border:1px solid var(--border);border-radius:4px;overflow:hidden;margin-top:10px}
+.cmp-cell{background:var(--background);padding:10px}
+.cmp-lbl{font-family:var(--mono);font-size:9px;color:var(--fg-dim);text-transform:uppercase;letter-spacing:.06em;margin-bottom:5px}
+.cmp-val{font-family:var(--mono);font-size:10px;word-break:break-all;line-height:1.6}
+.cmp-result{display:flex;align-items:center;gap:9px;margin-top:12px;padding:10px 12px;border:1px solid var(--ok);background:var(--ok-dim);border-radius:4px;font-family:var(--mono);font-size:11px;color:var(--ok)}
+.cmp-result.err{border-color:var(--err);background:var(--err-dim);color:var(--err)}
+
+/* ── EMPTY / ERROR STATES ─────────────────────────────────────── */
+.state{border:1px dashed var(--line-hi);padding:18px;text-align:center;font-size:11px;color:var(--fg-dim);line-height:1.7;border-radius:var(--radius);background:var(--card)}
+.state b{display:block;font-family:var(--mono);font-size:10.5px;color:var(--fg-muted);margin-bottom:4px;font-weight:500}
+
+/* ── NOTES STRIP ──────────────────────────────────────────────── */
+.notes{margin-top:20px;border:1px solid var(--border);background:var(--card);padding:14px;border-radius:var(--radius)}
+.notes-h{font-family:var(--mono);font-size:10px;color:var(--fg-dim);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px}
+.notes ul{list-style:none;display:grid;grid-template-columns:1fr 1fr;gap:6px 24px}
+@media(max-width:900px){.notes ul{grid-template-columns:1fr}}
+.notes li{font-size:11px;color:var(--fg-muted);padding-left:14px;position:relative}
+.notes li::before{content:'—';position:absolute;left:0;color:var(--fg-dim)}
+.notes li b{color:var(--foreground);font-weight:500;font-family:var(--mono);font-size:10px}
+.swatch{display:inline-block;width:8px;height:8px;border-radius:2px;vertical-align:middle;margin-right:5px;border:1px solid var(--line-hi)}
+mark{background:none;color:var(--primary)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- ═══ STATUS BAR ═══ -->
+  <div class="statusbar">
+    <div class="brand">
+      <span class="brand-mark">FedLedger</span>
+      <span class="brand-sub">Federated Learning · Blockchain Audit</span>
+    </div>
+    <div class="svc"><span class="dot on"></span>results feed</div>
+    <div class="svc"><span class="dot on"></span>verify api</div>
+    <div class="svc"><span class="dot off"></span>hardhat</div>
+    <div class="spacer"></div>
+    <div class="svc">replay</div>
+    <div class="round-chip">round <b>3</b> / 3</div>
+  </div>
+
+  <!-- ═══ STAT STRIP — shown once, not repeated per view ═══ -->
+  <div class="stats">
+    <div class="stat"><div class="stat-v">3</div><div class="stat-l">rounds logged</div></div>
+    <div class="stat"><div class="stat-v v-ok">88.2%</div><div class="stat-l">best local train acc</div></div>
+    <div class="stat"><div class="stat-v v-acc">85.7%</div><div class="stat-l">latest local train acc</div></div>
+    <div class="stat"><div class="stat-v">1</div><div class="stat-l">verified on-chain</div></div>
+  </div>
+
+  <div class="grid">
+
+    <!-- ═══ FEDERATION ═══ -->
+    <div class="panel">
+      <div class="panel-head">
+        <span class="panel-title">Federation</span>
+        <span class="panel-note">replay of a completed round</span>
+      </div>
+      <div class="panel-body">
+        <svg class="diagram" viewBox="0 0 640 350" preserveAspectRatio="xMidYMid meet">
+
+          <!-- ── org nodes: rows PINNED, they never leave ── -->
+          <g class="org">
+            <rect class="node-box" x="30" y="18" width="150" height="58" rx="3"/>
+            <text class="node-label" x="46" y="40">OrgA</text>
+            <text class="node-sub" x="46" y="55">40 rows · local only</text>
+            <text class="pin" x="164" y="40" text-anchor="end">⊘ 0 sent</text>
+          </g>
+          <g class="org">
+            <rect class="node-box" x="245" y="18" width="150" height="58" rx="3"/>
+            <text class="node-label" x="261" y="40">OrgB</text>
+            <text class="node-sub" x="261" y="55">40 rows · local only</text>
+            <text class="pin" x="379" y="40" text-anchor="end">⊘ 0 sent</text>
+          </g>
+          <g class="org">
+            <rect class="node-box" x="460" y="18" width="150" height="58" rx="3"/>
+            <text class="node-label" x="476" y="40">OrgC</text>
+            <text class="node-sub" x="476" y="55">40 rows · local only</text>
+            <text class="pin" x="594" y="40" text-anchor="end">⊘ 0 sent</text>
+          </g>
+
+          <!-- ── edges: node → server, each labelled with its payload ── -->
+          <path class="edge" d="M105,76 C105,140 285,150 285,205"/>
+          <path class="edge" d="M320,76 L320,205"/>
+          <path class="edge" d="M535,76 C535,140 355,150 355,205"/>
+          <path class="edge edge-dist" d="M105,76 C105,140 285,150 285,205" opacity="0"/>
+          <path class="edge edge-dist" d="M320,76 L320,205" opacity="0"/>
+          <path class="edge edge-dist" d="M535,76 C535,140 355,150 355,205" opacity="0"/>
+          <path class="edge-live" d="M105,76 C105,140 285,150 285,205" opacity="0"/>
+          <path class="edge-live" d="M320,76 L320,205" opacity="0"/>
+          <path class="edge-live" d="M535,76 C535,140 355,150 355,205" opacity="0"/>
+          <text class="edge-label" x="180" y="132">15 floats</text>
+          <text class="edge-label" x="330" y="132">15 floats</text>
+          <text class="edge-label" x="452" y="132">15 floats</text>
+
+          <!-- payload dots: outbound (accent) and return (verified green) -->
+          <circle class="packet" r="3.5" opacity="0"><animateMotion dur="1.4s" repeatCount="indefinite" path="M105,76 C105,140 285,150 285,205"/></circle>
+          <circle class="packet" r="3.5" opacity="0"><animateMotion dur="1.4s" repeatCount="indefinite" path="M320,76 L320,205"/></circle>
+          <circle class="packet" r="3.5" opacity="0"><animateMotion dur="1.4s" repeatCount="indefinite" path="M535,76 C535,140 355,150 355,205"/></circle>
+          <circle class="packet-dist" r="3.5" opacity="0"><animateMotion dur="1.4s" repeatCount="indefinite" path="M285,205 C285,150 105,140 105,76"/></circle>
+          <circle class="packet-dist" r="3.5" opacity="0"><animateMotion dur="1.4s" repeatCount="indefinite" path="M320,205 L320,76"/></circle>
+          <circle class="packet-dist" r="3.5" opacity="0"><animateMotion dur="1.4s" repeatCount="indefinite" path="M355,205 C355,150 535,140 535,76"/></circle>
+
+          <!-- ── FL server ── -->
+          <g class="server">
+            <rect class="server-box" x="215" y="205" width="210" height="62" rx="3"/>
+            <text class="node-label" x="320" y="228" text-anchor="middle">FL Server · FedAvg</text>
+            <text class="node-sub" x="320" y="243" text-anchor="middle">sample-weighted · weights only</text>
+            <text class="value-acc" x="320" y="259" text-anchor="middle">85.7%</text>
+          </g>
+
+          <!-- ── server → chain ── -->
+          <path class="edge" d="M320,267 L320,305"/>
+          <text class="edge-label" x="332" y="290">logRound()</text>
+
+          <!-- ── chain ── -->
+          <g class="chain">
+            <rect class="chain-box" x="200" y="305" width="240" height="38" rx="3"/>
+            <text class="node-label" x="320" y="322" text-anchor="middle">Hardhat · FLAuditLog</text>
+            <text class="node-sub" x="320" y="336" text-anchor="middle">append-only · #1 #2 #3</text>
+          </g>
+        </svg>
+      </div>
+
+      <!-- replay scrubber replaces all four run modes -->
+      <div class="scrub">
+        <div class="steps">
+          <button class="step-btn active" data-s="0">1 train</button>
+          <button class="step-btn" data-s="1">2 send</button>
+          <button class="step-btn" data-s="2">3 aggregate</button>
+          <button class="step-btn" data-s="3">4 seal</button>
+          <button class="step-btn" data-s="4">5 distribute</button>
+        </div>
+        <div class="step-desc" id="stepDesc">OrgA, OrgB, OrgC train on local data — 40 rows each, nothing transmitted</div>
+      </div>
+    </div>
+
+    <!-- ═══ LEDGER ═══ -->
+    <div class="panel">
+      <div class="panel-head">
+        <span class="panel-title">Rounds ledger</span>
+        <span class="panel-note">3 rounds · app/round_results.json</span>
+      </div>
+      <div class="panel-body" style="padding:0">
+        <table>
+          <thead><tr>
+            <th>round</th><th>local train acc</th><th>tx hash</th><th>parts</th><th>time</th><th>state</th>
+          </tr></thead>
+          <tbody>
+            <tr>
+              <td class="rnd">1</td><td class="acc">72.5%</td>
+              <td class="hash">0x4f2a…9c1e<button class="copy">copy</button></td>
+              <td class="dash">—</td><td class="dash">—</td>
+              <td><span class="tag ok">on-chain</span></td>
+            </tr>
+            <tr>
+              <td class="rnd">2</td><td class="acc">81.0%</td>
+              <td class="hash">0x0000…0000<button class="copy">copy</button></td>
+              <td class="dash">—</td><td class="dash">—</td>
+              <td><span class="tag err">not logged</span></td>
+            </tr>
+            <tr class="row-new">
+              <td class="rnd">3</td><td class="acc">85.7%</td>
+              <td class="hash">0xd2e5…77b4<button class="copy">copy</button></td>
+              <td class="dash">—</td><td class="dash">—</td>
+              <td><span class="tag cur">on-chain</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="panel-body" style="border-top:1px solid var(--border)">
+        <svg class="chart" viewBox="0 0 520 170" preserveAspectRatio="none">
+          <line class="c-grid" x1="34" y1="20"  x2="510" y2="20"/>
+          <line class="c-grid" x1="34" y1="70"  x2="510" y2="70"/>
+          <line class="c-grid" x1="34" y1="120" x2="510" y2="120"/>
+          <text class="c-lbl" x="30" y="23"  text-anchor="end">90%</text>
+          <text class="c-lbl" x="30" y="73"  text-anchor="end">80%</text>
+          <text class="c-lbl" x="30" y="123" text-anchor="end">70%</text>
+          <!-- thin line, no gradient fill -->
+          <path class="c-line" d="M60,120 L272,57 L484,28"/>
+          <circle class="c-dot" cx="60"  cy="120" r="3.5"><title>Round 1: 72.5% local train acc</title></circle>
+          <circle class="c-dot" cx="272" cy="57"  r="3.5"><title>Round 2: 81.0% local train acc</title></circle>
+          <circle class="c-dot" cx="484" cy="28"  r="3.5"><title>Round 3: 85.7% local train acc</title></circle>
+          <text class="c-lbl" x="60"  y="140" text-anchor="middle">r1</text>
+          <text class="c-lbl" x="272" y="140" text-anchor="middle">r2</text>
+          <text class="c-lbl" x="484" y="140" text-anchor="middle">r3</text>
+        </svg>
+        <div class="chart-note">
+          Mean of the three nodes' <b>local training</b> accuracy — not a held-out score.
+          The backend writes no <span class="mono">participants</span> or <span class="mono">timestamp</span>, so those columns stay <span class="mono">—</span>.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ VERIFY — full width, claim 3 ═══ -->
+  <div class="panel" style="margin-bottom:20px">
+    <div class="panel-head">
+      <span class="panel-title">Verify round integrity</span>
+      <span class="panel-note">POST :8088/verify · chain index, not round number</span>
+    </div>
+    <div class="panel-body">
+      <div class="verify-grid">
+        <div>
+          <div class="field">
+            <label>chain index</label>
+            <input value="1"/>
+            <div class="hint">Round 2 failed to log, so round 3 is also chain index <b>1</b>. This is the off-by-one the adapter has to absorb — you never type the round number here.</div>
+          </div>
+          <div class="field">
+            <label>weights — JSON. Floats must be written as <span class="mono">0.0</span>, never <span class="mono">0</span></label>
+            <textarea>[[0.0412, -0.1188, 0.2231, 0.0074], [-0.3310, 0.4455, -0.0912, 0.2763]]</textarea>
+          </div>
+          <div style="display:flex;gap:8px">
+            <button class="btn">verify hash</button>
+            <button class="btn ghost">paste round 3</button>
+          </div>
+          <div class="hint" style="margin-top:8px">No weight source exists in the backend yet, so these must be pasted by hand until it exposes per-round weights.</div>
+        </div>
+        <div>
+          <div class="cmp">
+            <div class="cmp-cell">
+              <div class="cmp-lbl">on-chain · modelHash</div>
+              <div class="cmp-val">0x8f14e45fceea167a5a36dedd4bea2543<br/>0b7ef1c0e5a2…</div>
+            </div>
+            <div class="cmp-cell">
+              <div class="cmp-lbl">recomputed · sha256(weights)</div>
+              <div class="cmp-val">0x8f14e45fceea167a5a36dedd4bea2543<br/>0b7ef1c0e5a2…</div>
+            </div>
+          </div>
+          <div class="cmp-result">
+            <span>✓</span><span>match — recomputed hash equals the hash recorded on-chain</span>
+          </div>
+          <div class="cmp-result err" style="margin-top:8px;display:none">
+            <span>✗</span><span>mismatch — tampering, or the wrong round was submitted</span>
+          </div>
+          <div class="hint" style="margin-top:10px">
+            The tx hash <span class="mono">0xd2e5…77b4</span> is a different value from the model hash and must never be shown in its place.
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ EMPTY / ERROR STATES — mandatory ═══ -->
+  <div class="grid">
+    <div class="state">
+      <b>no rounds yet</b>
+      Waiting for app/round_results.json. Start the launcher, or run the FL server to produce round 1.
+    </div>
+    <div class="state">
+      <b>verify api unreachable</b>
+      Run <span class="mono">python app/verify_server.py</span> — nothing else on port 8088 will answer.
+    </div>
+  </div>
+
+  <!-- ═══ PALETTE + CUTS ═══ -->
+  <div class="notes">
+    <div class="notes-h">palette in use — app/references/assets/color_scheme.txt</div>
+    <ul>
+      <li><span class="swatch" style="background:#141110"></span><b>background</b> 24 12% 7%</li>
+      <li><span class="swatch" style="background:#1c1917"></span><b>card</b> 24 10% 10%</li>
+      <li><span class="swatch" style="background:#2c2826"></span><b>secondary / node fill</b> 24 8% 16%</li>
+      <li><span class="swatch" style="background:#262322"></span><b>muted</b> 24 6% 14%</li>
+      <li><span class="swatch" style="background:#3c3734"></span><b>border</b> <mark>24 7% 16% → 22%</mark></li>
+      <li><span class="swatch" style="background:#e07d5c"></span><b>primary</b> 15 68% 62%</li>
+      <li><span class="swatch" style="background:#f3ccbf"></span><b>accent-fg</b> 15 68% 85%</li>
+      <li><span class="swatch" style="background:#3c2720"></span><b>accent hover</b> 15 30% 18%</li>
+      <li><span class="swatch" style="background:#e8e6e3"></span><b>foreground</b> 30 10% 90%</li>
+      <li><span class="swatch" style="background:#aaa5a1"></span><b>muted-fg</b> 24 5% 65%</li>
+      <li><span class="swatch" style="background:#6b6561"></span><b>tertiary</b> <mark>24 5% 40% (derived)</mark></li>
+      <li><span class="swatch" style="background:#509b6f"></span><b>verified</b> <mark>145 32% 46% (added)</mark></li>
+      <li><span class="swatch" style="background:#ef4343"></span><b>destructive</b> 0 84% 60%</li>
+      <li><span class="swatch" style="background:#fafafa"></span><b>destructive-fg</b> 0 0% 98%</li>
+    </ul>
+  </div>
+
+  <div class="notes">
+    <div class="notes-h">what is deliberately absent</div>
+    <ul>
+      <li><b>Overview tab</b> — cut; hero, stack cards, key-property cards</li>
+      <li><b>Phase guide</b> — cut; the scrubber labels each step instead</li>
+      <li><b>4 run modes</b> — cut; manual/auto/speedrun/replay → one scrubber</li>
+      <li><b>Two block feeds</b> — merged into the single ledger table</li>
+      <li><b>Glows &amp; gradient borders</b> — flat surfaces, 1px hairlines only</li>
+      <li><b>Fake status pings</b> — no dot goes green without a real check</li>
+      <li><b>Duplicate stats</b> — stat strip shown once, at the top</li>
+      <li><b>Gradient chart fill</b> — thin line, dots, gridlines only</li>
+    </ul>
+  </div>
+
+</div>
+
+<script>
+// Replay scrubber — steps through the 5 phases so every visual state can
+// be reviewed without the real animation machinery.
+const DESCS=[
+  'OrgA, OrgB, OrgC train on local data — 40 rows each, nothing transmitted',
+  'weights only travel node → server · 15 floats · 0 raw rows',
+  'FL Server runs FedAvg — sample-weighted average of the three updates',
+  'logRound() → block mined on Hardhat · tx 0xd2e5…77b4',
+  'global model distributed back · nodes go green, rows never moved'
+];
+const CLASSES=['','d-send','d-agg','d-seal','d-dist'];
+const svg=document.querySelector('.diagram');
+const packets=[...document.querySelectorAll('.packet')];
+const distPackets=[...document.querySelectorAll('.packet-dist')];
+const liveEdges=[...document.querySelectorAll('.edge-live')];
+const desc=document.getElementById('stepDesc');
+
+document.querySelectorAll('.step-btn').forEach(btn=>{
+  btn.addEventListener('click',()=>{
+    const s=+btn.dataset.s;
+    document.querySelectorAll('.step-btn').forEach(b=>b.classList.remove('active'));
+    btn.classList.add('active');
+    CLASSES.forEach(c=>svg.classList.remove(c));
+    if(CLASSES[s]) svg.classList.add(CLASSES[s]);
+    // outbound payloads on send; return payloads on distribute
+    packets.forEach(p=>p.setAttribute('opacity', s===1?'1':'0'));
+    distPackets.forEach(p=>p.setAttribute('opacity', s===4?'1':'0'));
+    liveEdges.forEach(e=>e.setAttribute('opacity', s===1?'1':'0'));
+    desc.textContent=DESCS[s];
+  });
+});
+
+// copy buttons are visual only in this mockup
+document.querySelectorAll('.copy').forEach(b=>b.addEventListener('click',()=>{
+  b.textContent='copied'; setTimeout(()=>b.textContent='copy',1200);
+}));
+</script>
+</body>
+</html>

@@ -1,0 +1,34 @@
+@layer base {
+  :root {
+    /* Subtle Lighting Dark Environment Mapping */
+    --background: 24 12% 7%;        /* Dark obsidian base */
+    --foreground: 30 10% 90%;       /* Soft silver-cream text */
+    
+    --card: 24 10% 10%;             /* Muted earthy container cards */
+    --card-foreground: 30 10% 90%;
+    
+    --popover: 24 10% 10%;
+    --popover-foreground: 30 10% 90%;
+  
+    /* The Subtle Lighting Core Glow Effect */
+    --primary: 15 68% 62%;          /* #e07b5b Ember / Terracotta glow */
+    --primary-foreground: 24 12% 7%; /* Dark text for primary button labels */
+  
+    --secondary: 24 8% 16%;         /* Dusty slate brown for secondary buttons */
+    --secondary-foreground: 30 5% 85%;
+  
+    --muted: 24 6% 14%;             /* Deep structural containment fill */
+    --muted-foreground: 24 5% 65%;  /* Desaturated taupe for lesser telemetry */
+  
+    --accent: 15 30% 18%;           /* Warm ambient glow for hover states */
+    --accent-foreground: 15 68% 85%;
+  
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 98%;
+  
+    --border: 24 7% 16%;            /* Soft, organic element separation boundaries */
+    --input: 24 7% 16%;
+    --ring: 15 68% 62%;             /* Glow focus state ring tracking */
+    --radius: 0.5rem;
+  }
+}
