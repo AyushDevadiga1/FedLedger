@@ -133,11 +133,16 @@ class BlockchainLogger:
                  accuracy_int,
                  participants,
                  weight_hash_bytes
-            ).transact({'from': self.account}) # Eth account 
+            ).transact({'from': self.account}) # Eth account
 
-        self.w3.eth.wait_for_transaction_receipt(tx_hash) # Wait for mining
+        # timeout=30 prevents the second round's tx from stalling indefinitely
+        # when Hardhat is busy mining block N and the next transact() call
+        # arrives before the receipt is ready. Without this, web3.py waits
+        # forever, which is why Round 2 frequently appears as "not logged".
+        self.w3.eth.wait_for_transaction_receipt(tx_hash, timeout=30) # Wait for mining
 
         return tx_hash.hex() # human-readable hex
+
 
 
     def get_round(self, round_index: int) -> dict:
