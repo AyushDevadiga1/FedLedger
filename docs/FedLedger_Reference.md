@@ -263,40 +263,57 @@ This is where everything connects. The order matters:
 
 ---
 
-## Module 7 — `app/` (Streamlit Dashboard)
+## Module 7 — `app/` (HTML Dashboard + Verify Server)
 
-**Concept:** Streamlit re-runs the entire script top-to-bottom on every user interaction. Use `st.session_state` to persist data across reruns. The dashboard has three panels in `main.py`.
-
----
-
-### Panel connection map
-
-| View file | Data source | Key Streamlit calls |
-|---|---|---|
-| `training_view.py` | `round_results` list from server (pass via session_state or read from a shared file) | `st.metric()`, `st.line_chart()`, `st.columns()` |
-| `audit_view.py` | `BlockchainLogger().get_round(i)` for all i | `st.dataframe()`, `st.metric()` |
-| `verify_view.py` | User pastes JSON weights, calls `BlockchainLogger().verify_round()` | `st.text_area()`, `st.button()`, `st.success()` / `st.error()` |
+**Why not Streamlit:** The project runs 5+ parallel processes. Streamlit can't orchestrate processes, can't do real-time animations, and requires a running Python server just to display results. A single self-contained HTML file solves all three problems — it polls a JSON file, animates via CSS/JS, and opens directly in the browser with no server needed.
 
 ---
 
-### `render_audit_panel()` — reading from blockchain
+### Data flow: server → dashboard
 
-```python
-# Pseudocode — write this yourself
-logger = BlockchainLogger()
-n = logger.total_rounds()
-rows = []
-for i in range(n):
-    r = logger.get_round(i)
-    rows.append({
-        "Round": r["roundNumber"],
-        "Accuracy": f"{r['accuracy']:.1%}",
-        "Nodes": ", ".join(r["participants"]),
-        "Hash (first 16)": r["modelHash"][:16] + "...",
-        "Time": datetime.fromtimestamp(r["timestamp"])
-    })
-st.dataframe(pd.DataFrame(rows))
 ```
+server.py  →  writes app/round_results.json after each round
+               format: [[round, accuracy, tx_hash, participants, timestamp], ...]
+
+app/index.html  →  fetch('round_results.json') every 2 seconds
+                →  on new rounds: animate diagram, add block card, update chart
+```
+
+The JSON format is a list of lists — each inner list is one round's data positionally:
+- `[0]` round number (int)
+- `[1]` accuracy (float, 0–100)
+- `[2]` tx_hash (hex string)
+- `[3]` participants (list of strings)
+- `[4]` timestamp (unix int, optional)
+
+---
+
+### Animation phases (driven by new data arriving)
+
+```
+'training'     → node boxes glow purple (local training)
+'aggregating'  → weight arrows appear node→server (FedAvg running)
+'sealing'      → blockchain box pulses (logRound tx confirmed)
+'distributing' → global weight arrows appear server→nodes (next round ready)
+'idle'         → reset
+```
+
+Each phase runs for a fixed duration (`sleep(ms)`) so the animation completes in ~4.5s per round.
+
+---
+
+### `app/verify_server.py` — hash verification API
+
+**Concept:** The dashboard JS can't import Python — it talks to a tiny HTTP server instead. When a user pastes their local weights and clicks "verify hash", the JS POSTs to `http://127.0.0.1:8088/verify?round=N` with the weights as JSON. The server calls `BlockchainLogger().verify_round()` and returns `{"match": true/false}`.
+
+| | |
+|---|---|
+| Port | 8088 |
+| Endpoint | `POST /verify?round=N` |
+| Body | `{"weights": [[coef values], [intercept values]]}` |
+| Returns | `{"match": true}` or `{"match": false, "error": "..."}` |
+| CORS | enabled — browser can call it from `file://` |
+| Start | `python app/verify_server.py` (or via `run_fedledger.py`) |
 
 ---
 
@@ -312,17 +329,29 @@ Run with: `pytest tests/ -v`
 
 ---
 
-## Start-up sequence (when you want to run the full system)
+## Start-up sequence
 
+**One command (recommended):**
+```
+python run_fedledger.py
+```
+Starts everything in the correct order, opens dashboard automatically.
+
+**Manual (if you want to see each process separately):**
 ```
 Terminal 1:  cd blockchain && npx hardhat node
 Terminal 2:  cd blockchain && npx hardhat run scripts/deploy.js --network localhost
-Terminal 3:  python data/generate_partitions.py
-Terminal 4:  python fl_server/server.py
-Terminal 5:  python fl_nodes/node.py --node 1
-Terminal 6:  python fl_nodes/node.py --node 2
-Terminal 7:  python fl_nodes/node.py --node 3
-Terminal 8:  streamlit run app/main.py
+Terminal 3:  cd fl_server && python server.py
+Terminal 4:  python fl_nodes/node.py --node 1
+Terminal 5:  python fl_nodes/node.py --node 2
+Terminal 6:  python fl_nodes/node.py --node 3
+Terminal 7:  python app/verify_server.py
+Browser:     open app/index.html
+```
+
+**Data must exist first (run once ever):**
+```
+python data/generate_partitions.py
 ```
 
 ---

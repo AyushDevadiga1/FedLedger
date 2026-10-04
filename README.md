@@ -2,79 +2,65 @@
 
 **Federated Learning with Blockchain Audit Trail**
 
-Three organisations train a shared ML model using Federated Learning without
-sharing raw data. After every training round, a permanent Ethereum transaction
-records the round number, accuracy, participants, and a cryptographic hash of
-the aggregated model weights — a tamper-proof, independently verifiable audit
-trail of the whole training process.
+Three organisations train a shared ML model using Federated Learning without sharing raw data. After every training round, a permanent Ethereum transaction records the round number, accuracy, participants, and a SHA-256 hash of the aggregated model weights — a tamper-proof, independently verifiable audit trail of the whole training process.
 
-**Stack:** Python · Flower (flwr) · scikit-learn · Hardhat · Solidity · web3.py · Streamlit
+**Stack:** Python · Flower (flwr) · scikit-learn · Hardhat · Solidity · web3.py · HTML/JS dashboard
 
 ---
 
-## Project Status
+## Quickstart
 
-| Module | Status |
-|---|---|
-| Data partitioning | Complete |
-| FedAvg + weight hashing | Complete |
-| FL client node | Complete |
-| FL server strategy | Complete |
-| `FLAuditLog.sol` + deploy script | Complete |
-| web3 audit bridge | Complete |
-| Dashboard (Streamlit) | Scaffold — all three `render_*` panels are still `pass` |
-| Dashboard (HTML frontend) | In development, pending commit — `app/index.html` + `app/verify_server.py` on port 8088 |
-| Unit tests | Skeletons — 12 collected, 0 assertions; built in parallel with the frontend |
+```
+python run_fedledger.py
+```
+
+That single command starts everything in order — Hardhat node, contract deployment, FL server, all three nodes, verify server — and opens the dashboard in your browser automatically.
+
+To stop: `Ctrl+C`
+
+---
+
+## Manual startup (if you want control over each process)
+
+```
+# Terminal 1 — local Ethereum chain
+cd blockchain && npx hardhat node
+
+# Terminal 2 — deploy contract (run once per session)
+cd blockchain && npx hardhat run scripts/deploy.js --network localhost
+
+# Terminal 3 — FL server
+cd fl_server && python server.py
+
+# Terminals 4, 5, 6 — one per node
+python fl_nodes/node.py --node 1
+python fl_nodes/node.py --node 2
+python fl_nodes/node.py --node 3
+
+# Terminal 7 — verify API (for dashboard hash verification)
+python app/verify_server.py
+
+# Open in browser
+app/index.html
+```
 
 ---
 
 ## Modules
 
-| Module | Resource | Responsibility |
+| Module | File | Responsibility |
 |---|---|---|
-| FL Nodes | `fl_nodes/node.py` | Flower client. Trains locally on a private partition, sends only weights to the server. One script serves all nodes via `--node 1/2/3`. |
-| FL Server | `fl_server/server.py` | Orchestrates training rounds and distributes the global model. |
-| FedAvg | `fl_server/fedavg.py` | Weighted aggregation of local weights + SHA-256 weight hashing. |
-| Audit Bridge | `fl_server/blockchain_logger.py` | Connects Python to the smart contract; logs every round on-chain via web3.py. |
-| Contract | `blockchain/contracts/FLAuditLog.sol` | Append-only audit log — no delete or edit functions. |
-| Contract Deploy | `blockchain/scripts/deploy.js` | Hardhat script that deploys the contract and saves its address. |
-| Dashboard | `app/main.py` | Streamlit three-panel UI: training progress, blockchain audit log, hash verification. Scaffold only. |
-| Dataset | `data/generate_partitions.py` | Splits the dataset into three private node partitions. |
-| Tests | `tests/` | Unit test skeletons for FedAvg, blockchain logging and hash verification. |
-
----
-
-## How to Run
-
-Order matters: `deploy.js` is what generates `contract_config.json`, which is
-not tracked in git (see Known Gaps).
-
-```
-# 1. Dependencies
-pip install -r requirements.txt
-npm --prefix blockchain install
-
-# 2. Generate the three private partitions (run once)
-python data/generate_partitions.py
-
-# 3. Local Ethereum node  — terminal 1
-npx hardhat node
-
-# 4. Deploy the audit contract  — terminal 2
-#    Writes the contract address and ABI path into contract_config.json
-npx hardhat run scripts/deploy.js --network localhost
-
-# 5. Start the Flower server on port 8080  — terminal 2
-python fl_server/server.py
-
-# 6. Start each participant node  — terminals 3, 4, 5
-python fl_nodes/node.py --node 1
-python fl_nodes/node.py --node 2
-python fl_nodes/node.py --node 3
-```
-
-Every round is aggregated, hashed, and written on-chain. Watch the server
-console for the per-round accuracy and transaction hash.
+| Launcher | `run_fedledger.py` | One-command startup — starts all 6 processes in order |
+| FL Nodes | `fl_nodes/node.py` | Flower client. Trains locally, sends only weights. One script serves all nodes via `--node 1/2/3`. |
+| FL Server | `fl_server/server.py` | Orchestrates rounds, writes `app/round_results.json` after each round |
+| FedAvg | `fl_server/fedavg.py` | Weighted aggregation of local weights + SHA-256 weight hashing |
+| Audit Bridge | `fl_server/blockchain_logger.py` | Connects Python to the smart contract via web3.py |
+| Contract | `blockchain/contracts/FLAuditLog.sol` | Append-only audit log on-chain — no delete or edit functions |
+| Deploy Script | `blockchain/scripts/deploy.js` | Deploys the contract, writes address to `contract_config.json` |
+| Dashboard | `app/index.html` | Live FL architecture diagram, blockchain feed, hash verification |
+| Verify Server | `app/verify_server.py` | Tiny HTTP server (port 8088) the dashboard calls for hash verification |
+| Dataset | `data/generate_partitions.py` | Splits Iris into 3 private node partitions |
+| Tests | `tests/` | Unit tests for FedAvg, blockchain logging, hash verification |
 
 ---
 
@@ -82,60 +68,65 @@ console for the per-round accuracy and transaction hash.
 
 ```
 FedLedger/
+├── run_fedledger.py               # One-command launcher
 ├── fl_nodes/
-│   └── node.py                # Flower client — any node serves itself via --node
+│   └── node.py                    # Flower client (any node via --node)
 ├── fl_server/
-│   ├── server.py              # Flower server — orchestrates rounds
-│   ├── fedavg.py              # FedAvg aggregation + weight hashing
-│   └── blockchain_logger.py   # Ethereum audit-trail bridge (web3.py)
+│   ├── server.py                  # Flower server + FedAvg orchestration
+│   ├── fedavg.py                  # FedAvg aggregation + weight hashing
+│   └── blockchain_logger.py       # Ethereum audit-trail bridge (web3.py)
 ├── blockchain/
 │   ├── contracts/FLAuditLog.sol   # Append-only audit smart contract
 │   ├── scripts/deploy.js          # Hardhat deployment script
-│   ├── hardhat.config.js          # Hardhat configuration
-│   ├── package.json               # Hardhat dependencies (manifest)
-│   ├── contract_config.example.json  # Reference shape of the contract config
-│   └── contract_config.json       # Generated by deploy.js — not tracked
+│   ├── hardhat.config.js          # Hardhat config (Ethers v6)
+│   └── contract_config.json       # Contract address + ABI path (auto-written)
 ├── app/
-│   ├── main.py                # Streamlit entry point (3-panel dashboard)
-│   ├── training_view.py       # Node status + accuracy chart
-│   ├── audit_view.py          # Blockchain transaction log
-│   └── verify_view.py         # Hash verification panel
+│   ├── index.html                 # Dashboard — live diagram, audit log, verify
+│   ├── verify_server.py           # Hash verify API on port 8088
+│   └── round_results.json         # Written by server.py after each round
 ├── data/
-│   ├── generate_partitions.py # Split dataset into 3 private partitions
-│   └── node1/ node2/ node3/   # Private node partitions (never shared)
-├── docs/
-│   └── FedLedger_Reference.md # Per-function implementation reference
+│   ├── generate_partitions.py     # Split dataset into 3 private partitions
+│   └── node1/ node2/ node3/       # Private node partitions (.npy files)
 ├── tests/
-│   ├── test_fedavg.py         # FedAvg aggregation + hashing
-│   ├── test_blockchain.py     # Round logging on-chain
-│   └── test_verify.py         # Hash verification
-├── package.json               # Hardhat Node.js dependencies
-├── requirements.txt           # Python dependencies
+│   ├── test_fedavg.py
+│   ├── test_blockchain.py
+│   └── test_verify.py
+├── docs/
+│   └── FedLedger_Reference.md     # Function-by-function implementation guide
+├── blockchain/package.json        # Hardhat Node.js dependencies
+├── requirements.txt               # Python dependencies
 └── README.md
 ```
 
 ---
 
-## Known Gaps
+## How the dashboard works
 
-- **Streamlit panels are unimplemented.** `render_training_panel`,
-  `render_audit_panel` and `render_verify_panel` are empty stubs.
-- **The HTML dashboard is in progress and uncommitted.** `app/index.html` and
-  `app/verify_server.py` are not yet in version control.
-- **`verify_server.py:10` uses a `sys.path` hack** to import
-  `blockchain_logger`. Unnecessary now that `fl_server` modules use
-  package-qualified imports.
-- **Tests are assertion-free skeletons.** Real assertions land with the
-  frontend work.
-- **`pytest` needs `-p no:pytest_ethereum`.** The pinned `web3==6.9.0` is
-  incompatible with the resolved `eth-typing==6.0.0`, so the web3 pytest
-  plugin fails to import and aborts collection before any test runs.
-- **`contract_config.json` is never committed.** It holds a machine-specific
-  absolute ABI path and a per-deployment contract address, so `deploy.js`
-  regenerates it locally instead. See `contract_config.example.json`.
-- **The dataset is Iris.** The MNIST swap for image classification is still
-  pending.
-- **On-chain hash is `keccak256(SHA-256(weights))`,** not a bare SHA-256.
-  `compute_weight_hash` produces the 64-char SHA-256 hex digest, and
-  `log_round` stores its keccak256 hash as the `bytes32` value. Verification
-  recomputes both steps.
+`server.py` writes `app/round_results.json` after every training round. The dashboard (`app/index.html`) polls this file every 2 seconds and:
+
+- Animates the FL architecture diagram in real time (nodes pulse → weight arrows appear → server aggregates → blockchain seals → global weights distributed back)
+- Adds a new block card to the audit feed for each completed round
+- Plots the accuracy curve as rounds complete
+- Lets you paste local weights and verify against the on-chain hash to prove the server ran FedAvg honestly
+
+---
+
+## First run
+
+```bash
+# 1. Install Python dependencies
+pip install -r requirements.txt
+
+# 2. Install Hardhat (inside blockchain/)
+cd blockchain && npm install && cd ..
+
+# 3. Generate data partitions (once)
+python data/generate_partitions.py
+
+# 4. Run everything
+python run_fedledger.py
+```
+
+---
+
+*B.E. CS (AI & ML) · Bharat College of Engineering, Badlapur · Mumbai University · Blockchain Technology Mini-Project*
