@@ -6,10 +6,9 @@ scikit-learn==1.3.0
 # Blockchain
 web3==6.9.0
 
-# Dashboard
-streamlit==1.28.0
-plotly==5.17.0
-pandas==2.1.1
+# Dashboard (served by app/dashboard_server.py — pure stdlib, no extra deps)
+# NOTE: streamlit / plotly / pandas were removed. The dashboard is now a
+# Vite/React app; those packages added ~400 MB of unused install bloat.
 
 # Utilities
 python-dotenv==1.0.0
