@@ -44,24 +44,24 @@ def federated_average(
 
     total_samples = sum(sample_counts)
 
-    has_intercept = len(weights_list[0]) > 1
-    
-    federeated_sum_weight = np.zeros_like(weights_list[0][0],dtype=np.float64)
-    if has_intercept : 
-      federeated_sum_intercept = np.zeros_like(weights_list[0][1],dtype=np.float64)
+    # Determine the number of parameter tensors from the first node.
+    # All nodes must use the same model architecture, so this count is
+    # identical across all entries in weights_list (coef_ + intercept_
+    # for LogisticRegression with fit_intercept=True → 2 arrays).
+    num_layers = len(weights_list[0])
 
-    for sample_count,weight_list in zip(sample_counts,weights_list):
-      federeated_sum_weight += sample_count*weight_list[0]
-      if has_intercept:
-        federeated_sum_intercept += sample_count*weight_list[1]
+    # Accumulate the weighted sum for each layer independently.
+    # Using float64 prevents precision loss when sample counts are large.
+    federated_sum = [
+        np.zeros_like(weights_list[0][i], dtype=np.float64)
+        for i in range(num_layers)
+    ]
 
-    federated_weight_avg = federeated_sum_weight/total_samples
+    for sample_count, weight_list in zip(sample_counts, weights_list):
+        for i in range(num_layers):
+            federated_sum[i] += sample_count * weight_list[i]
 
-    if has_intercept:
-      federated_intercept_avg = federeated_sum_intercept/total_samples
-      return [federated_weight_avg, federated_intercept_avg]
-
-    return [federated_weight_avg,]
+    return [layer / total_samples for layer in federated_sum]
       
 
 def compute_weight_hash(global_weights: List[np.ndarray]) -> str:
