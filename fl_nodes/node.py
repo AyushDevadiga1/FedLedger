@@ -100,16 +100,18 @@ class FedLedgerClient(fl.client.NumPyClient):
           3. Return updated weights, number of training samples, metrics dict
         TODO: implement training loop. Never send raw data — only weights.
         """
-        N = 1
         self.set_parameters(parameters)
-        
+
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            self.model.fit(self.X_train,self.y_train)
+            self.model.fit(self.X_train, self.y_train)
             print(f'[{self.node_id}] Training completed !!!')
-        
-        accuracy = self.model.score(self.X_train, self.y_train)
-        
+
+        # Score on the held-out test split — not the training set.
+        # Training-set accuracy is always inflated and would make the
+        # blockchain audit trail meaningless.
+        accuracy = self.model.score(self.X_test, self.y_test)
+
         return (self.get_parameters({}), len(self.X_train), {"accuracy": accuracy})
             
 
