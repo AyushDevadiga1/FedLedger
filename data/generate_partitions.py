@@ -18,6 +18,13 @@ Available datasets:
 import argparse
 import json
 import os
+import sys
+
+# Windows consoles still default to cp1252, which cannot encode the arrows
+# and separators printed below. The script would die on a print statement
+# long after it had written the .npy files, leaving a half-finished run.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 import numpy as np
 from sklearn.datasets import (
