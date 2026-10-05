@@ -74,8 +74,8 @@ function MlState({ round }: { round: LedgerRound }) {
         <div className="flex flex-col gap-1">
           <Eyebrow>Held-out accuracy</Eyebrow>
           <p className="text-sm text-muted-foreground">
-            Mean of the three organisations&apos; accuracy, each scored on its
-            own local 20% held-out split.
+            The aggregated global model, scored by all three organisations,
+            each on its own local 20% held-out split, then averaged.
           </p>
         </div>
       </div>

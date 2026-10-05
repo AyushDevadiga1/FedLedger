@@ -97,7 +97,7 @@ export function AuditTab({
       </Panel>
 
       <Panel>
-        <PanelHead title="Accuracy" meta="train, not held-out" />
+        <PanelHead title="Accuracy" meta="global held-out evaluation" />
         <div className="min-h-0 flex-1 px-3 py-4">
           <AccuracyChart rounds={rounds} />
         </div>
@@ -140,7 +140,7 @@ function LedgerTable({
       <TableHeader>
         <TableRow>
           <TableHead>round</TableHead>
-          <TableHead>train acc</TableHead>
+          <TableHead>held-out acc</TableHead>
           <TableHead>tx hash</TableHead>
           <TableHead>chain #</TableHead>
           <TableHead>state</TableHead>

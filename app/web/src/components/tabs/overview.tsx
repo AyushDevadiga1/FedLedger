@@ -368,10 +368,11 @@ export function OverviewTab({
           <div className="flex flex-col gap-4 px-5 py-4">
             <p className="text-sm text-muted-foreground">
               <span className="font-mono">round_results.json</span> carries
-              three fields per round: the round number, the mean local
-              held-out accuracy, and the transaction hash. Anything beyond
-              that is read from the contract itself, and anything the contract
-              never stored is marked as missing rather than filled in.
+              three fields per round: the round number, the mean held-out
+              accuracy of the aggregated global model, and the transaction
+              hash. Anything beyond that is read from the contract itself, and
+              anything the contract never stored is marked as missing rather
+              than filled in.
             </p>
 
             <LimitGroup
@@ -384,7 +385,7 @@ export function OverviewTab({
                 },
                 {
                   missing: 'score on a common test set',
-                  why: `The ${stats.latest?.toFixed(1) ?? '—'}% figure is the mean of each node's accuracy on its own 20% held-out split of its local data. Each node holds different rows, so the scores are averaged but never measured against one shared test set — it is not directly comparable to a single-model generalisation score.`,
+                  why: `The ${stats.latest?.toFixed(1) ?? '—'}% figure is one global model scored by all three nodes, each on its own 20% held-out split of its local data, then averaged. The model is shared but the test rows are not, so this is not directly comparable to a single-model generalisation score on one common test set.`,
                 },
                 {
                   missing: 'per-organisation accuracy',

@@ -15,7 +15,14 @@ export type RawRound = [round: number, accuracy: number, txHash: string]
 export interface LedgerRound {
   /** Server round number as written by the backend. */
   round: number
-  /** Mean of the three nodes' accuracy on their own local held-out split. */
+  /**
+   * Mean of the three nodes' scores for the *aggregated global model*, each
+   * measured on that node's own local held-out split.
+   *
+   * Not the mean of the three local models' accuracies: the backend measures
+   * this in `aggregate_evaluate`, after FedAvg, by broadcasting the new global
+   * weights back to the nodes and scoring those. See fl_server/server.py:213.
+   */
   accuracy: number
   /** Transaction hash, or '0x0' when the round never made it on-chain. */
   txHash: string
