@@ -50,9 +50,14 @@
   --verified: 145 32% 46%; /* 5.60:1 on background           #509b6f */
   --verified-foreground: 145 40% 96%;
 
-  /* Third-level text. 3.27:1 — readable, clearly below the 7.7:1 of
-     --muted-foreground, so hierarchy survives without going too dim. */
-  --subtle: 24 5% 40%; /*  3.27:1                        #6b6561 */
+  /* Third-level text. The source value was 24 5% 40% (#6b6561), which
+     measures 3.05:1 on --card and fails WCAG AA (4.5:1) for body text.
+     --subtle is used for real sentences — the "check:" lines on Overview,
+     every Phase detail, the dropzone hint — not just hairlines, so it has to
+     clear AA. Lifted to 52% => 4.70:1 on card, 5.05:1 on background, which
+     still sits well below --muted-foreground's 7.17:1 so the three-level
+     hierarchy survives. */
+  --subtle: 24 5% 52%; /*  4.70:1 on card                #8b837e */
 }
 
 @theme inline {

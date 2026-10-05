@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { AlertTriangle, Check, X } from 'lucide-react'
+import { AlertTriangle, Check, Download, FileCode, X } from 'lucide-react'
 
 import {
   EmptyState,
@@ -20,6 +20,11 @@ import {
   type LedgerRound,
   type VerifyOutcome,
 } from '@/lib/ledger'
+import {
+  downloadTemplate,
+  fetchTemplate,
+  WEIGHT_TEMPLATES,
+} from '@/lib/templates'
 
 export function VerifyTab({
   rounds,
@@ -129,7 +134,59 @@ export function VerifyTab({
             </div>
 
             <div className="flex flex-col gap-2">
-              <Label htmlFor="weights">global weights, as JSON</Label>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <Label htmlFor="weights">global weights, as JSON</Label>
+                <span className="font-mono text-2xs text-subtle">
+                  [coef_matrix, intercept_vector]
+                </span>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2 border border-border bg-muted/40 px-3 py-2">
+                <FileCode className="size-3.5 shrink-0 text-subtle" aria-hidden />
+                <span className="text-2xs text-muted-foreground">
+                  Demo files
+                </span>
+                {WEIGHT_TEMPLATES.map((t) => (
+                  <span key={t.url} className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const text = await fetchTemplate(t.url)
+                        if (typeof text !== 'string') {
+                          setOutcome({ status: 'error', chainIndex: Number(chainIndex) || 0, message: text.error })
+                          return
+                        }
+                        // Strip the _comment keys: they document the format for
+                        // a human reading the file, but parseWeights rejects a
+                        // 3-element array.
+                        const bare = text.trim().replace(/^_\w+".*$/gm, '').replace(/,\s*([\]}])/g, '$1')
+                        setWeights(bare)
+                        setDroppedName(t.name)
+                        setOutcome(null)
+                        if (!chainIndex && verifiable.length > 0) {
+                          setChainIndex(String(verifiable[0]!.chainIndex))
+                        }
+                      }}
+                      className="rounded-sm border border-border-strong px-1.5 py-0.5 font-mono text-2xs text-primary transition-colors hover:border-primary/50 hover:bg-primary/10"
+                      title={`Load ${t.blurb} — ${t.shape}`}
+                    >
+                      {t.name}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => downloadTemplate(t.url, t.name)}
+                      className="text-subtle transition-colors hover:text-foreground"
+                      title={`Download ${t.name}`}
+                      aria-label={`Download ${t.name}`}
+                    >
+                      <Download className="size-3" />
+                    </button>
+                  </span>
+                ))}
+                <span className="text-2xs text-subtle">
+                  — shows the two shapes a coef matrix takes
+                </span>
+              </div>
               <Textarea
                 id="weights"
                 spellCheck={false}
@@ -166,13 +223,19 @@ export function VerifyTab({
 
             <Alert className="border-primary/40 bg-primary/5 text-foreground [&>svg]:text-primary">
               <AlertTriangle />
-              <AlertTitle>Trailing zeros change the hash</AlertTitle>
+              <AlertTitle>Demo files will not match, and that is correct</AlertTitle>
               <AlertDescription>
-                The verifier hashes the serialised JSON, so{' '}
-                <span className="font-mono">0.0</span> and{' '}
-                <span className="font-mono">0</span> produce different
-                digests. A genuine match will report a mismatch if the
-                weights were normalised on the way in.
+                The chain stores a SHA-256 of the <em>real</em> aggregated
+                weights. The demo files above are plausible but invented, so
+                Compare hashes reports a mismatch — which is the honest result
+                and shows verification is genuinely running.
+                <span className="mt-2 block text-muted-foreground">
+                  Also note the verifier hashes the serialised JSON, so{' '}
+                  <span className="font-mono">0.0</span> and{' '}
+                  <span className="font-mono">0</span> produce different
+                  digests. A genuine match reports a mismatch if the weights
+                  were normalised on the way in.
+                </span>
               </AlertDescription>
             </Alert>
 

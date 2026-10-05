@@ -1,0 +1,11 @@
+{
+  "_comment": "Same shape as weights_iris.json, for a binary classifier. breast_cancer is binary, so sklearn gives coef_ shape (1, n_features) — one row, not two. The intercept vector therefore has exactly 1 entry. This is the single most common reason a correct file is rejected.",
+  "_iris_note": "weights_iris.json has 3 coef rows because iris has 3 classes. A binary dataset has 1 row. If you got 'intercept length 2 must match coef rows 1', the file was written for a 3-class model.",
+
+  "weights": [
+    [
+      [0.64342, 0.42871, 0.55219, 0.93102, 0.08411, -0.32117, 0.76284, -1.40211, 1.19344, -0.40771, -0.77218, 0.29104, -0.88421, -0.61152, 0.34881, -0.21934, -0.51062, 0.77419, -1.02884, -0.29117, 0.44290, -0.68231, 0.15874, 0.92103, -0.33418, -0.71209, -0.47285, 0.40561, 0.13892, -0.95173]
+    ],
+    [-3.42118]
+  ]
+}

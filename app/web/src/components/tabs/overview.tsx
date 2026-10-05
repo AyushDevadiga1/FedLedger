@@ -1,4 +1,11 @@
-import { AlertTriangle, Check, Download, Minus, Upload } from 'lucide-react'
+import {
+  AlertTriangle,
+  Check,
+  Download,
+  FileCode,
+  Minus,
+  Upload,
+} from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import {
@@ -12,6 +19,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { parseRounds, summarise, type LedgerRound } from '@/lib/ledger'
 import { ORGANISATIONS } from '@/lib/federation'
+import { downloadTemplate, fetchTemplate, SNAPSHOT_TEMPLATES } from '@/lib/templates'
 
 interface DatasetMeta {
   name: string
@@ -136,6 +144,32 @@ export function OverviewTab({
   const datasetMeta = useDatasetMeta()
   const fileRef = useRef<HTMLInputElement>(null)
   const [snapshotLoaded, setSnapshotLoaded] = useState(false)
+  const [snapshotError, setSnapshotError] = useState<string | null>(null)
+
+  /**
+   * Shared by the file picker and the demo template, so both go through the
+   * same parseRounds guard. A template that fails to parse would otherwise
+   * look identical to a template that worked.
+   */
+  const acceptSnapshot = useCallback(
+    (text: string, label: string) => {
+      try {
+        const parsed = parseRounds(JSON.parse(text))
+        if (parsed.length === 0) {
+          setSnapshotError(
+            `${label} parsed, but held no rounds — expected an array of [round, accuracy, txHash]`,
+          )
+          return
+        }
+        onLoadSnapshot?.(parsed)
+        setSnapshotLoaded(true)
+        setSnapshotError(null)
+      } catch {
+        setSnapshotError(`${label} is not valid JSON.`)
+      }
+    },
+    [onLoadSnapshot],
+  )
 
   const saveSnapshot = useCallback(() => {
     const raw = rounds.map((r) => [r.round, r.accuracy, r.txHash])
@@ -148,24 +182,15 @@ export function OverviewTab({
     URL.revokeObjectURL(url)
   }, [rounds])
 
-  const loadSnapshot = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file) return
-    const reader = new FileReader()
-    reader.onload = (ev) => {
-      try {
-        const raw: unknown = JSON.parse(ev.target?.result as string)
-        if (onLoadSnapshot) {
-          onLoadSnapshot(parseRounds(raw))
-        }
-        setSnapshotLoaded(true)
-      } catch {
-        alert('Could not parse snapshot file.')
-      }
-    }
-    reader.readAsText(file)
-    if (fileRef.current) fileRef.current.value = ''
-  }, [onLoadSnapshot])
+  const loadSnapshot = useCallback(
+    async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0]
+      if (!file) return
+      acceptSnapshot(await file.text(), file.name)
+      if (fileRef.current) fileRef.current.value = ''
+    },
+    [acceptSnapshot],
+  )
 
   if (rounds.length === 0) {
     return (
@@ -233,6 +258,54 @@ export function OverviewTab({
               Load snapshot
             </Button>
           </div>
+        </div>
+
+        {/* ── snapshot format, stated rather than implied ── */}
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border border-border bg-muted/40 px-3 py-2">
+          <FileCode className="size-3.5 shrink-0 text-subtle" aria-hidden />
+          <span className="text-2xs text-muted-foreground">Snapshot format</span>
+          <code className="font-mono text-2xs text-foreground">
+            [round, accuracy, txHash]
+          </code>
+          <span className="text-2xs text-subtle">
+            — one array per round, accuracy as a percentage. A txHash of
+            <span className="font-mono"> &quot;0x0&quot;</span> means the round
+            did not reach the chain.
+          </span>
+          {SNAPSHOT_TEMPLATES.map((t) => (
+            <span key={t.url} className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={async () => {
+                  const text = await fetchTemplate(t.url)
+                  if (typeof text !== 'string') {
+                    setSnapshotError(text.error)
+                    return
+                  }
+                  acceptSnapshot(text, t.name)
+                }}
+                className="rounded-sm border border-border-strong px-1.5 py-0.5 font-mono text-2xs text-primary transition-colors hover:border-primary/50 hover:bg-primary/10"
+                title={`Load ${t.blurb}`}
+              >
+                load {t.name}
+              </button>
+              <button
+                type="button"
+                onClick={() => downloadTemplate(t.url, t.name)}
+                className="text-subtle transition-colors hover:text-foreground"
+                title={`Download ${t.name}`}
+                aria-label={`Download ${t.name}`}
+              >
+                <Download className="size-3" />
+              </button>
+            </span>
+          ))}
+          {snapshotError ? (
+            <span className="flex w-full items-start gap-1.5 text-2xs text-destructive">
+              <AlertTriangle className="mt-px size-3 shrink-0" aria-hidden />
+              {snapshotError}
+            </span>
+          ) : null}
         </div>
 
         {/* ── figures ── */}

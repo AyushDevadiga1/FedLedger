@@ -1,0 +1,13 @@
+{
+  "_comment": "Template for the Verify tab (POST :8088/verify). Shape is [coef_matrix, intercept_vector] — the coef matrix first, then the intercept vector. Rows of coef must all be the same length, and there must be exactly as many intercepts as coef rows. This is iris: 3 classes x 4 features.",
+  "_how_to_get_a_real_one": "Train the federation, then recompute FedAvg over the three node updates. The backend does not expose stored weights, so the values must be pasted or dropped in. See README or ask the server for the aggregated weights.",
+
+  "weights": [
+    [
+      [-0.38533, 0.81425, -1.97541, -0.92310],
+      [0.45781, -1.34119, 0.42852, -0.81917],
+      [-0.07248, 0.52694, 1.54689, 1.74227]
+    ],
+    [0.24513, 1.10923, -1.35432]
+  ]
+}

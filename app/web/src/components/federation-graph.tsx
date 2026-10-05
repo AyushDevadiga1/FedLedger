@@ -4,6 +4,7 @@ import {
   EdgeLabelRenderer,
   getBezierPath,
   Handle,
+  MarkerType,
   Position,
   ReactFlow,
   useReactFlow,
@@ -74,7 +75,7 @@ function OrgNode({ data }: NodeProps<Node<OrgData, 'org'>>) {
             className="pointer-events-none absolute -inset-2.5 border border-dashed border-primary/45"
           />
           <span
-            className="absolute -top-2 right-2 flex items-center gap-1 border border-primary/40 bg-card px-1 py-0.5 font-mono text-[10px] text-primary"
+            className="absolute -top-2 right-2 flex items-center gap-1 border border-primary/40 bg-card px-1 py-0.5 font-mono text-2xs text-primary"
             title="Raw rows stay inside this boundary. Only coefficients cross it."
           >
             <ShieldCheck className="size-2.5" aria-hidden />
@@ -182,7 +183,7 @@ function ServerNode({ data }: NodeProps<Node<ServerData, 'server'>>) {
           {formatAccuracy(accuracy)}
         </span>
         <span className="text-xs text-muted-foreground">
-          mean local train acc
+          global test acc
         </span>
       </div>
       <Handle id="chain" type="source" position={Position.Bottom} />
@@ -205,7 +206,7 @@ function ChainNode({ data }: NodeProps<Node<ChainData, 'chain'>>) {
         </span>
         <span className="font-mono text-xs text-subtle">Hardhat :8545</span>
       </div>
-      <div className="mt-2 flex items-center gap-1.5">
+      <div className="mt-2 flex flex-wrap items-center gap-1.5 max-h-24 overflow-y-auto">
         {blocks === 0 ? (
           <span className="font-mono text-xs text-subtle">no blocks yet</span>
         ) : (
@@ -241,10 +242,23 @@ function ChainNode({ data }: NodeProps<Node<ChainData, 'chain'>>) {
 interface PayloadData extends Record<string, unknown> {
   label: string
   direction: FlowDirection
-  /** 'up' = node to server, 'down' = server to node. */
-  lane: 'up' | 'down'
-  animated: boolean
+  /**
+   * Which way this edge carries its payload, in screen terms: 'up' when the
+   * source sits below the target, 'down' when it sits above. Only the edge
+   * whose lane equals the current phase direction lights up, so this has to
+   * describe the real geometry — an edge whose lane is mislabelled never
+   * animates and the flow silently looks dead.
+   */
+  lane: FlowDirection
+  /**
+   * Whether this edge carries a payload right now. Computed by the graph
+   * builder rather than derived in the edge component, so the phase -> lane
+   * decision lives in exactly one place and cannot drift from the geometry.
+   */
+  live: boolean
   tone: 'accent' | 'verified'
+  /** Vertical nudge, in px, applied to the edge label. */
+  labelDy?: number
 }
 
 /**
@@ -267,6 +281,8 @@ function PayloadEdgeBase({
   data,
   markerEnd,
 }: EdgeProps<Edge<PayloadData, 'payload'>>) {
+  // Arrowhead colour is decided per edge in useFederationGraph, where the
+  // phase is known; React Flow renders whatever MarkerType it is handed.
   const [path, labelX, labelY] = getBezierPath({
     sourceX,
     sourceY,
@@ -279,12 +295,12 @@ function PayloadEdgeBase({
 
   const guideRef = useRef<SVGPathElement>(null)
   const dotRef = useRef<SVGCircleElement>(null)
-  const { direction, lane, animated, tone, label } = data ?? {}
+  const { live, tone, label, labelDy = 0 } = data ?? {}
 
   useEffect(() => {
     const guide = guideRef.current
     const dot = dotRef.current
-    if (!guide || !dot || !animated || direction === 'none') return
+    if (!guide || !dot || !live) return
 
     const { translateX, translateY } = svg.createMotionPath(guide)
 
@@ -307,9 +323,9 @@ function PayloadEdgeBase({
       instance.pause()
       instance.revert()
     }
-  }, [animated, direction, lane])
+  }, [live])
 
-  const live = animated && direction === lane
+  const active = live === true
   const stroke = tone === 'verified' ? 'var(--color-verified)' : 'var(--color-primary)'
 
   return (
@@ -322,14 +338,14 @@ function PayloadEdgeBase({
         path={path}
         markerEnd={markerEnd}
         style={{
-          stroke: live ? stroke : 'var(--color-border-strong)',
-          strokeWidth: live ? 1.5 : 1,
-          strokeDasharray: live ? undefined : '3 4',
+          stroke: active ? stroke : 'var(--color-border-strong)',
+          strokeWidth: active ? 1.5 : 1,
+          strokeDasharray: active ? undefined : '3 4',
           transition: 'stroke 300ms, stroke-width 300ms',
         }}
       />
 
-      {live ? (
+      {active ? (
         <circle
           ref={dotRef}
           r="3.5"
@@ -344,14 +360,16 @@ function PayloadEdgeBase({
       <EdgeLabelRenderer>
         <div
           className={cn(
-            'pointer-events-none absolute -translate-x-1/2 -translate-y-1/2 rounded-sm border px-1.5 py-0.5 font-mono text-xs whitespace-nowrap transition-colors duration-300',
-            live
+            'pointer-events-none absolute rounded-sm border px-1.5 py-0.5 font-mono text-xs whitespace-nowrap transition-colors duration-300',
+            active
               ? tone === 'verified'
                 ? 'border-verified/40 bg-verified/10 text-verified'
                 : 'border-primary/40 bg-primary/10 text-primary'
               : 'border-border bg-card text-subtle',
           )}
-          style={{ transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)` }}
+          style={{
+            transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY + labelDy}px)`,
+          }}
         >
           {label}
         </div>
@@ -431,8 +449,11 @@ export function useFederationGraph({
   const edges = useMemo<Edge[]>(() => {
     const list: Edge[] = []
 
-    for (const org of ORGS) {
-      // weights travelling up to the aggregator
+    for (const [i, org] of ORGS.entries()) {
+      // Weights travelling up from the node to the aggregator. Each of the
+      // three carries an identical payload, so they share one label and it is
+      // nudged along the path per node — three copies of the same sentence at
+      // the same x is what made the old diagram look like one broken thread.
       list.push({
         id: `${org.id}-up`,
         source: org.id,
@@ -440,15 +461,22 @@ export function useFederationGraph({
         target: 'server',
         targetHandle: 'in',
         type: 'payload',
+        markerEnd: {
+          type: MarkerType.ArrowClosed,
+          width: 14,
+          height: 14,
+          color: direction === 'up' ? 'var(--color-primary)' : 'var(--color-border-strong)',
+        },
         data: {
-          label: '15 floats · weights only',
+          label: 'weights only · coef + intercept',
           direction,
           lane: 'up',
-          animated: direction !== 'none',
+          live: direction === 'up',
           tone: 'accent',
+          labelDy: -22 + i * 22,
         } satisfies PayloadData,
       })
-      // global model travelling back down to the same organisation
+      // Global model travelling back down to the same organisation.
       list.push({
         id: `${org.id}-down`,
         source: 'server',
@@ -456,16 +484,28 @@ export function useFederationGraph({
         target: org.id,
         targetHandle: 'in',
         type: 'payload',
+        markerEnd: {
+          type: MarkerType.ArrowClosed,
+          width: 14,
+          height: 14,
+          color:
+            direction === 'down' ? 'var(--color-verified)' : 'var(--color-border-strong)',
+        },
         data: {
           label: 'global model',
           direction,
           lane: 'down',
-          animated: direction !== 'none',
+          live: direction === 'down',
           tone: 'verified',
+          labelDy: -22 + i * 22,
         } satisfies PayloadData,
       })
     }
 
+    // Server to ledger. The chain sits BELOW the server, so this payload
+    // travels down — the old edge declared lane 'up' and only ever lit up
+    // because the phase check happened to pass. An arrowhead now makes a
+    // mislabelled lane impossible to miss.
     list.push({
       id: 'server-chain',
       source: 'server',
@@ -473,11 +513,17 @@ export function useFederationGraph({
       target: 'chain',
       targetHandle: 'in',
       type: 'payload',
+      markerEnd: {
+        type: MarkerType.ArrowClosed,
+        width: 14,
+        height: 14,
+        color: phase === 'seal' ? 'var(--color-primary)' : 'var(--color-border-strong)',
+      },
       data: {
         label: 'logRound() · hash',
-        direction: phase === 'seal' ? 'up' : 'none',
-        lane: 'up',
-        animated: phase === 'seal',
+        direction: phase === 'seal' ? 'down' : 'none',
+        lane: 'down',
+        live: phase === 'seal',
         tone: 'accent',
       } satisfies PayloadData,
     })
