@@ -17,13 +17,25 @@ import { Button } from '@/components/ui/button'
 import { Slider } from '@/components/ui/slider'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useReplay } from '@/hooks/use-replay'
+import { useMotionPreference } from '@/hooks/use-motion-preference'
 import { useDatasetMeta } from '@/hooks/use-dataset-meta'
 import { formatAccuracy, type LedgerRound } from '@/lib/ledger'
 import { organisationRows, parameterCount } from '@/lib/federation'
 import { PHASES, type Phase } from '@/lib/phases'
+import type { MotionPreference } from '@/lib/motion'
 import { cn } from '@/lib/utils'
 
 const SPEEDS = [0.5, 1, 1.5, 2, 3] as const
+
+const MOTION_OPTIONS: ReadonlyArray<{
+  id: MotionPreference
+  label: string
+  hint: string
+}> = [
+  { id: 'auto', label: 'Auto', hint: 'Follow the OS reduced-motion setting' },
+  { id: 'full', label: 'Full', hint: 'Always animate payloads' },
+  { id: 'reduced', label: 'Still', hint: 'Light the links, never move the dots' },
+]
 
 /**
  * The payload line shown for a phase.
@@ -48,6 +60,7 @@ export function TrainingTab({
   usingMock: boolean
 }) {
   const replay = useReplay()
+  const motion = useMotionPreference()
   const latest = rounds[rounds.length - 1] ?? null
   const blocks = rounds.filter((r) => r.onChain).length
   const meta = useDatasetMeta()
@@ -84,6 +97,8 @@ export function TrainingTab({
             accuracy={latest?.accuracy ?? null}
             rounds={rounds}
             rows={localRows}
+            timeScale={replay.speed}
+            motionOn={motion.animate}
             className="size-full"
           />
 
@@ -252,6 +267,29 @@ export function TrainingTab({
               Reduced-motion is on, so stepping is manual.
             </p>
           ) : null}
+
+          <div className="flex items-center gap-1" role="group" aria-label="Motion">
+            <span className="mr-1 font-mono text-xs text-muted-foreground">
+              motion
+            </span>
+            {MOTION_OPTIONS.map((option) => (
+              <button
+                key={option.id}
+                type="button"
+                onClick={() => motion.setPreference(option.id)}
+                aria-pressed={motion.preference === option.id}
+                title={option.hint}
+                className={cn(
+                  'rounded-sm border px-1.5 py-0.5 font-mono text-xs transition-colors',
+                  motion.preference === option.id
+                    ? 'border-primary/50 bg-primary/10 text-primary'
+                    : 'border-border text-subtle hover:border-primary/40 hover:text-foreground',
+                )}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
         </div>
       </Panel>
     </div>

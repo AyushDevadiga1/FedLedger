@@ -396,9 +396,17 @@ interface PayloadData extends Record<string, unknown> {
    * each node ships its own update, they are not a single broadcast. The
    * down-link has no delay because the server really does return the global
    * model to everyone at once.
+   *
+   * Both numbers are *base* timings at 1x speed. The edge divides them by
+   * `timeScale` before starting, so the replay speed control rescales the
+   * whole diagram instead of only the phase clock — and when `motionOn` is
+   * false no animation starts at all: the link still lights, the dot simply
+   * never leaves.
    */
   delayMs?: number
   travelMs?: number
+  timeScale?: number
+  motionOn?: boolean
 }
 
 /**
@@ -444,15 +452,21 @@ function PayloadEdgeBase({
     labelDy = 0,
     delayMs = 0,
     travelMs = 700,
+    timeScale = 1,
+    motionOn = true,
   } = data ?? {}
 
   useEffect(() => {
     const guide = guideRef.current
     const dot = dotRef.current
-    if (!guide || !dot || !live) return
+    if (!guide || !dot || !live || !motionOn) return
+
+    const scale = timeScale > 0 ? timeScale : 1
+    const duration = Math.max(Math.round(travelMs / scale), 120)
+    const delay = Math.max(Math.round(delayMs / scale), 0)
+    const ramp = Math.min(160, Math.round(duration * 0.25))
 
     const { translateX, translateY } = svg.createMotionPath(guide)
-    const ramp = Math.min(160, Math.round(travelMs * 0.25))
 
     const instance = animate(dot, {
       translateX,
@@ -460,11 +474,11 @@ function PayloadEdgeBase({
       opacity: [
         { to: 0, duration: 0 },
         { to: 1, duration: ramp },
-        { to: 1, duration: Math.max(travelMs - ramp * 2, 60) },
+        { to: 1, duration: Math.max(duration - ramp * 2, 60) },
         { to: 0, duration: ramp },
       ],
-      duration: travelMs,
-      delay: delayMs,
+      duration,
+      delay,
       ease: 'inOutQuad',
     })
 
@@ -472,7 +486,7 @@ function PayloadEdgeBase({
       instance.pause()
       instance.revert()
     }
-  }, [live, delayMs, travelMs])
+  }, [live, delayMs, travelMs, timeScale, motionOn])
 
   const active = live === true
   const stroke =
@@ -564,6 +578,16 @@ export interface FederationGraphProps {
    * row count that disagrees with the running dataset discredits it.
    */
   rows?: number[]
+  /**
+   * Replay speed multiplier. Rescales dot travel and stagger, not just the
+   * phase clock, so 2x reads as twice as fast everywhere at once.
+   */
+  timeScale?: number
+  /**
+   * Master motion switch. False holds every dot at its origin while leaving
+   * the links lit — the state is still readable, nothing moves.
+   */
+  motionOn?: boolean
   className?: string
 }
 
@@ -594,6 +618,8 @@ export function useFederationGraph({
   accuracy,
   rounds,
   rows,
+  timeScale = 1,
+  motionOn = true,
 }: FederationGraphProps) {
   const direction = directionFor(phase)
 
@@ -698,6 +724,8 @@ export function useFederationGraph({
           labelDy: -26 + i * 26,
           delayMs: i * UPLOAD_STAGGER_MS,
           travelMs: UPLOAD_TRAVEL_MS,
+          timeScale,
+          motionOn,
         } satisfies PayloadData,
       })
       // Global model travelling back to every organisation simultaneously —
@@ -725,6 +753,8 @@ export function useFederationGraph({
           labelDy: -26 + i * 26,
           delayMs: 0,
           travelMs: RETURN_TRAVEL_MS,
+          timeScale,
+          motionOn,
         } satisfies PayloadData,
       })
     }
@@ -754,11 +784,13 @@ export function useFederationGraph({
         tone: 'accent',
         delayMs: 60,
         travelMs: SEAL_TRAVEL_MS,
+        timeScale,
+        motionOn,
       } satisfies PayloadData,
     })
 
     return list
-  }, [direction, phase])
+  }, [direction, phase, timeScale, motionOn])
 
   return { nodes, edges, nodeTypes: NODE_TYPES }
 }

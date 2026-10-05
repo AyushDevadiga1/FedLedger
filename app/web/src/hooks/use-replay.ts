@@ -17,11 +17,33 @@ export interface Replay {
   reducedMotion: boolean
 }
 
+const SPEED_STORAGE_KEY = 'fedledger:replay-speed'
+
 function prefersReducedMotion(): boolean {
   return (
     typeof window !== 'undefined' &&
     window.matchMedia('(prefers-reduced-motion: reduce)').matches
   )
+}
+
+/** Replay speed persists across reloads — a demo pauses and resumes at 2x. */
+function loadSpeed(): number {
+  try {
+    const raw = window.localStorage.getItem(SPEED_STORAGE_KEY)
+    const parsed = Number(raw)
+    if (Number.isFinite(parsed) && parsed > 0) return parsed
+  } catch {
+    /* storage blocked — fall through to 1x */
+  }
+  return 1
+}
+
+function saveSpeed(speed: number): void {
+  try {
+    window.localStorage.setItem(SPEED_STORAGE_KEY, String(speed))
+  } catch {
+    /* storage blocked — the session value still applies */
+  }
 }
 
 /**
@@ -36,7 +58,7 @@ export function useReplay(): Replay {
   const [phase, setPhase] = useState<PhaseId | null>(null)
   const [cursor, setCursor] = useState(-1)
   const [isPlaying, setIsPlaying] = useState(false)
-  const [speed, setSpeedState] = useState(1)
+  const [speed, setSpeedState] = useState(loadSpeed)
   const [reducedMotion] = useState(prefersReducedMotion)
 
   const timerRef = useRef<number | null>(null)
@@ -94,6 +116,11 @@ export function useReplay(): Replay {
     goTo(cursor + 1)
   }, [cursor, goTo])
 
+  const setSpeed = useCallback((nextSpeed: number) => {
+    setSpeedState(nextSpeed)
+    saveSpeed(nextSpeed)
+  }, [])
+
   // Advance the cursor on a timer while playing.
   useEffect(() => {
     if (!isPlaying) return
@@ -125,7 +152,7 @@ export function useReplay(): Replay {
     reset,
     goTo,
     next,
-    setSpeed: setSpeedState,
+    setSpeed,
     reducedMotion,
   }
 }
