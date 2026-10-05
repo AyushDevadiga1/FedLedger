@@ -135,13 +135,18 @@ class BlockchainLogger:
                  weight_hash_bytes
             ).transact({'from': self.account}) # Eth account
 
-        # timeout=30 prevents the second round's tx from stalling indefinitely
-        # when Hardhat is busy mining block N and the next transact() call
-        # arrives before the receipt is ready. Without this, web3.py waits
-        # forever, which is why Round 2 frequently appears as "not logged".
+        # Hardhat auto-mines, so the receipt is normally ready immediately. The
+        # bound is a safety net so a wedged node cannot hang the FL round
+        # forever; it is NOT the cause of rounds going unlogged. An earlier
+        # comment here blamed this wait for missing rounds, which was wrong —
+        # TimeExhausted merely converts a wait into an exception that
+        # aggregate_fit swallows into tx_hash "0x0".
         self.w3.eth.wait_for_transaction_receipt(tx_hash, timeout=30) # Wait for mining
 
-        return tx_hash.hex() # human-readable hex
+        # HexBytes.hex() drops the "0x" prefix in current hexbytes releases,
+        # which breaks the dashboard's block-explorer link. to_hex() is
+        # always 0x-prefixed regardless of version.
+        return Web3.to_hex(tx_hash)
 
 
 
@@ -169,7 +174,7 @@ class BlockchainLogger:
             "roundNumber": raw_round_data[0],
             "accuracy": raw_round_data[1] / 1000, # 3. Convert accuracy integer back to float
             "participants": raw_round_data[2],
-            "modelHash": raw_round_data[3].hex() if isinstance(raw_round_data[3], bytes) else raw_round_data[3],
+            "modelHash": Web3.to_hex(raw_round_data[3]) if isinstance(raw_round_data[3], bytes) else raw_round_data[3],
             "timestamp": raw_round_data[4]
         }
 
