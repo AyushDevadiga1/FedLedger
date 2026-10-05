@@ -13,19 +13,76 @@ except Exception:
 # ---------------------------------------------------------------------------
 
 def _make_logger():
-    """Return a BlockchainLogger or skip the test if the chain is unreachable."""
+    """Return a BlockchainLogger or skip the test if the chain is unreachable.
+
+    Two distinct preconditions are checked separately so a failure names the
+    one that is actually missing. Previously any error collapsed into a skip,
+    which is how six tests went from passing to BadFunctionCallOutput without
+    anything saying the contract was never deployed on this chain.
+    """
     try:
         logger = BlockchainLogger()
-        if not logger.w3.is_connected():
-            pytest.skip("Hardhat node not reachable on :8545 — run: npx hardhat node")
-        return logger
     except Exception as e:
         pytest.skip(f"BlockchainLogger init failed ({e}) — deploy the contract first")
+
+    if not logger.w3.is_connected():
+        pytest.skip("Hardhat node not reachable on :8545 — run: npx hardhat node")
+
+    # A reachable node is not the same as a deployed contract. On a freshly
+    # restarted chain the configured address has no code, and every contract
+    # call fails with an opaque BadFunctionCallOutput.
+    if not logger.w3.eth.get_code(logger.contract.address):
+        pytest.skip(
+            f"no contract at {logger.contract.address} on this chain "
+            "(block "
+            f"{logger.w3.eth.block_number}) — run: "
+            "npx hardhat run scripts/deploy.js --network localhost"
+        )
+
+    return logger
 
 
 def _dummy_weights():
     rng = np.random.default_rng(99)
     return [rng.standard_normal((3, 4)), rng.standard_normal((3,))]
+
+
+def test_log_round_returns_prefixed_tx_hash():
+    """tx hash must be 0x-prefixed.
+
+    HexBytes.hex() returns a bare hex string in current hexbytes releases,
+    so returning it directly produced hashes the dashboard could not use as
+    block-explorer links. Web3.to_hex() is always prefixed.
+    """
+    logger = _make_logger()
+    tx_hash = logger.log_round(
+        round_number=logger.total_rounds() + 1,
+        accuracy=51.2,
+        participants=["OrgA", "OrgB", "OrgC"],
+        global_weights=_dummy_weights(),
+    )
+    assert isinstance(tx_hash, str)
+    assert tx_hash.startswith("0x"), f"expected 0x-prefixed hash, got {tx_hash!r}"
+    assert len(tx_hash) == 66, f"expected 32-byte hash, got len={len(tx_hash)}"
+
+
+def test_get_round_returns_prefixed_model_hash():
+    """modelHash must be 0x-prefixed too, or the receipt's keccak comparison
+    against a recomputed value has to special-case the prefix (it did)."""
+    logger = _make_logger()
+    weights = _dummy_weights()
+    idx = logger.total_rounds()
+    logger.log_round(
+        round_number=idx + 1,
+        accuracy=62.5,
+        participants=["OrgA"],
+        global_weights=weights,
+    )
+    record = logger.get_round(idx)
+    assert record["modelHash"].startswith("0x"), (
+        f"expected 0x-prefixed modelHash, got {record['modelHash']!r}"
+    )
+    assert logger.verify_round(idx, weights) is True
 
 
 # ---------------------------------------------------------------------------
