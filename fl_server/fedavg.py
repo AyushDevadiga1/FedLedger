@@ -50,6 +50,8 @@ def federated_average(
     # for LogisticRegression with fit_intercept=True → 2 arrays).
     num_layers = len(weights_list[0])
 
+    _assert_compatible(weights_list)
+
     # Accumulate the weighted sum for each layer independently.
     # Using float64 prevents precision loss when sample counts are large.
     federated_sum = [
@@ -63,6 +65,30 @@ def federated_average(
 
     return [layer / total_samples for layer in federated_sum]
       
+
+def _assert_compatible(weights_list: List[List[np.ndarray]]) -> None:
+    """Fail with a readable reason if the nodes cannot be averaged.
+
+    numpy would otherwise raise on adding mismatched shapes from deep inside
+    the accumulation loop, or — worse — broadcast silently when one node
+    contributed fewer rows. Nodes disagree on shape when their datasets have
+    a different class count, or when a shard is missing a class entirely.
+    """
+    reference = weights_list[0]
+    for i, tensors in enumerate(weights_list[1:], start=2):
+        if len(tensors) != len(reference):
+            raise ValueError(
+                f"node {i} sent {len(tensors)} parameter tensors but node 1 sent "
+                f"{len(reference)} — the nodes are not running the same model"
+            )
+        for layer, (mine, theirs) in enumerate(zip(tensors, reference)):
+            if mine.shape != theirs.shape:
+                raise ValueError(
+                    f"node {i} tensor {layer} has shape {mine.shape} but node 1 "
+                    f"has {theirs.shape}; every node must hold the same number "
+                    f"of classes and features for FedAvg to be well defined"
+                )
+
 
 def compute_weight_hash(global_weights: List[np.ndarray]) -> str:
     """

@@ -59,7 +59,19 @@ class FedLedgerStrategy(fl.server.strategy.Strategy):
         # Initialise here — not lazily in aggregate_fit — so any code that
         # reads self.round_results always gets a list, never an AttributeError.
         self.round_results: list = []
+        # Rounds whose blockchain log_round() call raised. Surfaced so a
+        # silent "0x0" tx hash can be traced back to a cause.
+        self.blockchain_failures: list = []
+        # Diagnostic only: mean of the pre-aggregation local scores. Never
+        # written to the chain, since it does not describe the global model.
+        self.local_fit_accuracies: dict = {}
+        # Participants per round, held between aggregate_fit (which knows who
+        # contributed) and aggregate_evaluate (which writes the receipt).
+        self._round_participants: dict = {}
 
+        # max_iter here is inert: the server assigns coef_/intercept_ from the
+        # FedAvg result and never calls fit(). Client-side convergence is what
+        # governs learning quality (see fl_nodes/node.py LOCAL_MAX_ITER).
         self.model = LogisticRegression(penalty="l2", max_iter=1, warm_start=True)
 
     def initialize_parameters(self, client_manager):
@@ -101,8 +113,7 @@ class FedLedgerStrategy(fl.server.strategy.Strategy):
             failures: list of failed clients (handle gracefully)
 
         TODO:
-          1. Extract weights and sample counts from results:
-              weights_list = [fit_res.parameters.tensors for _, fit_res in results]
+          1. Extract sample counts and participants from results:
              sample_counts = [fit_res.num_examples for _, fit_res in results]
              participants = [proxy.cid for proxy, _ in results]
           2. Convert Flower parameters to numpy arrays
@@ -124,7 +135,12 @@ class FedLedgerStrategy(fl.server.strategy.Strategy):
             return None, {}
 
         # 1. Extract structural data from results
-        weights_list = [fit_res.parameters.tensors for _, fit_res in results]
+        # NOTE: do NOT reach for fit_res.parameters.tensors here. That
+        # attribute was removed from Flower long ago; in flwr 1.7.0
+        # Parameters only carries `data_type`/`tensor_type` and the raw
+        # tensors. Reading it raises AttributeError and killed the whole
+        # aggregate_fit before anything could be logged. The conversion in
+        # step 2 is the only supported way in.
         sample_counts = [fit_res.num_examples for _, fit_res in results]
         participants = [proxy.cid for proxy, _ in results]
 
@@ -137,51 +153,39 @@ class FedLedgerStrategy(fl.server.strategy.Strategy):
         self.model.coef_ = self.global_weights[0]
         self.model.intercept_ = self.global_weights[1]
 
-        # 4. Average accuracy across all clients.
-        # sklearn.score() always returns a fraction in [0, 1], so we convert
-        # explicitly to percentage.  The old conditional guard
-        # (if accuracy <= 1.0: accuracy * 100) was fragile: if a future
-        # client ever sent a percentage directly the guard would silently
-        # skip the conversion.
-        client_accuracies = [
+        # 4. Do NOT derive the on-chain accuracy from these metrics.
+        #
+        # Each FitRes accuracy is the score of that node's *local* model,
+        # measured before aggregation. Averaging them measures the three
+        # pre-aggregation models, not the global model that gets deployed —
+        # so the number sealed on-chain did not describe the thing it was
+        # claiming to audit. The accuracy now recorded is the aggregated
+        # model's, produced by aggregate_evaluate below.
+        #
+        # The mean local score is still tracked per round, but only as a
+        # diagnostic; it is never written to the chain.
+        local_accuracies = [
             fit_res.metrics["accuracy"]
             for _, fit_res in results
             if fit_res.metrics and "accuracy" in fit_res.metrics
         ]
-        if client_accuracies:
-            accuracy = (sum(client_accuracies) / len(client_accuracies)) * 100
+        if local_accuracies:
+            self.local_fit_accuracies[server_round] = (
+                sum(local_accuracies) / len(local_accuracies) * 100
+            )
         else:
             raise RuntimeError(
                 f"❌ Round {server_round} Aggregation Failed: Clients did not report an 'accuracy' metric. "
                 f"Ensure client side fit() returns {{'accuracy': value}} in its metrics dictionary."
             )
 
+        # 5. Stash what aggregate_evaluate needs: the participants that
+        # contributed, and the round number. Logging is deferred to
+        # aggregate_evaluate so the recorded accuracy belongs to the
+        # aggregated model rather than the local ones.
+        self._round_participants[server_round] = participants
 
-        # 5. Call self.blockchain_logger.log_round with exact matching parameters
-        tx_hash = "0x0"
-        try:
-            tx_hash = self.blockchain_logger.log_round(
-                round_number=server_round,
-                accuracy=accuracy,
-                participants=participants,
-                global_weights=self.global_weights  # Cleanly passed directly to match blockchain_logger.py
-            )
-        except Exception as e:
-            print(f"|| Blockchain Logging Transaction Failure: {e}")
-
-        self.round_results.append((server_round, accuracy, tx_hash))
-
-        # 7. Print round summary to console
-        print(f" Round {server_round} complete. Accuracy: {accuracy:.2f}%. Tx: {tx_hash}")
-
-        # Write results to JSON so the dashboard can read them
-        try:
-            with open(_RESULTS_PATH, 'w') as f:
-                json.dump(self.round_results, f)
-        except Exception as e:
-            print(f"[dashboard] Could not write round_results.json: {e}")
-
-        # 8. Return (aggregated_parameters, {})
+        # 6. Return (aggregated_parameters, {})
         aggregated_parameters = fl.common.ndarrays_to_parameters(self.global_weights)
         return aggregated_parameters, {}
 
@@ -190,22 +194,94 @@ class FedLedgerStrategy(fl.server.strategy.Strategy):
 
     def configure_evaluate(self, server_round, parameters, client_manager):
         """
-        Configure evaluation round.
-        TODO: return empty list — we evaluate centrally in aggregate_fit.
+        Send the aggregated global model back to every node for scoring.
+
+        This is what makes the on-chain accuracy meaningful. Each node scores
+        the *global* weights on its own held-out split and returns only the
+        score — no rows leave the node, so the privacy property the dashboard
+        advertises is intact. It also means the number is a mean of per-node
+        scores rather than one shared test set, which the dashboard states
+        explicitly instead of implying otherwise.
         """
-        return []
+        clients = client_manager.sample(num_clients=3)
+        config = {}
+        return [
+            (client, fl.common.EvaluateIns(parameters, config))
+            for client in clients
+        ]
 
     def aggregate_evaluate(self, server_round, results, failures):
         """
-        Aggregate evaluation results.
-        TODO: return None, {} — not used, evaluation done in aggregate_fit.
+        Average the nodes' scores of the global model and seal the round.
+
+        The accuracy written to FLAuditLog is measured here, after
+        aggregation, so the immutable record describes the global model
+        rather than the pre-aggregation local models. One logRound per round,
+        append-only, exactly as before — only the meaning of the number
+        changed.
         """
-        return None, {}
+        accuracies = [
+            res.metrics["accuracy"]
+            for _, res in results
+            if res.metrics and "accuracy" in res.metrics
+        ]
+        if not accuracies:
+            print(
+                f"[evaluate] Round {server_round}: no node returned an accuracy "
+                f"({len(failures)} failure(s)); not writing to the chain"
+            )
+            return None, {}
+
+        # sklearn.score() returns a fraction in [0, 1]; the contract stores
+        # int(accuracy * 1000), so convert to percent here exactly once.
+        accuracy = (sum(accuracies) / len(accuracies)) * 100
+
+        participants = self._round_participants.get(server_round, [])
+        tx_hash = "0x0"
+        try:
+            tx_hash = self.blockchain_logger.log_round(
+                round_number=server_round,
+                accuracy=accuracy,
+                participants=participants,
+                global_weights=self.global_weights,
+            )
+        except Exception as e:
+            # Keep the exception type: without it every failure looked
+            # identical in the log, which is what made the round-2 bug so
+            # hard to trace. tx_hash stays "0x0" so the round is still
+            # recorded in round_results.json with its accuracy.
+            print(
+                f"[blockchain] Round {server_round} NOT logged: "
+                f"{type(e).__name__}: {e}"
+            )
+            self.blockchain_failures.append(
+                {"round": server_round, "error": f"{type(e).__name__}: {e}"}
+            )
+
+        self.round_results.append((server_round, accuracy, tx_hash))
+
+        local = self.local_fit_accuracies.get(server_round)
+        diagnostic = f" (pre-aggregation local mean {local:.2f}%)" if local is not None else ""
+        print(
+            f" Round {server_round} complete. Global model accuracy: "
+            f"{accuracy:.2f}%{diagnostic}. Tx: {tx_hash}"
+        )
+
+        try:
+            with open(_RESULTS_PATH, 'w') as f:
+                json.dump(self.round_results, f)
+        except Exception as e:
+            print(f"[dashboard] Could not write round_results.json: {e}")
+
+        return accuracy, {"accuracy": accuracy}
 
     def evaluate(self, server_round, parameters):
         """
         Optional server-side evaluation.
-        TODO: return None — evaluation handled in aggregate_fit.
+
+        Deliberately disabled. Evaluating here would need the server to hold
+        a labelled validation set, which is exactly the centralisation the
+        federated design is meant to avoid. The nodes do the scoring.
         """
         return None
 
