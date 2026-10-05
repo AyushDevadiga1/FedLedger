@@ -51,7 +51,9 @@ export function PanelHead({
 /* ── Stat tile ────────────────────────────────────────────────────────
    Value leads, label follows. The label sits above in the old dashboard
    which made every tile read as a caption; putting the number first makes
-   the row scannable as a single figure. */
+   the row scannable as a single figure. The tone also paints a 2px top
+   bar plus a faint wash (fedledger-tone-*), so a row of tiles reads as
+   colour and number together rather than number alone. */
 export function StatTile({
   label,
   value,
@@ -64,7 +66,15 @@ export function StatTile({
   hint?: string
 }) {
   return (
-    <div className="flex min-w-0 flex-col gap-1 bg-card px-4 py-3">
+    <div
+      className={cn(
+        'fedledger-tone flex min-w-0 flex-col gap-1 bg-card px-4 py-3',
+        tone === 'accent' && 'fedledger-tone-accent',
+        tone === 'verified' && 'fedledger-tone-verified',
+        tone === 'destructive' && 'fedledger-tone-destructive',
+        tone === 'default' && 'fedledger-tone-neutral',
+      )}
+    >
       <span className="text-xs text-muted-foreground">{label}</span>
       <span
         className={cn(

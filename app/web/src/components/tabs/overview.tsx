@@ -18,6 +18,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { useDatasetMeta } from '@/hooks/use-dataset-meta'
 import { parseRounds, summarise, type LedgerRound } from '@/lib/ledger'
+import { revealStyle } from '@/lib/motion'
 import {
   ORGANISATIONS,
   organisationRows,
@@ -72,14 +73,24 @@ function ClaimRow({
   evidence,
   check,
   supported,
+  index,
 }: {
   claim: string
   evidence: string
   check: string
   supported: boolean | null
+  /** Stagger step for the entrance reveal. */
+  index: number
 }) {
   return (
-    <li className="grid gap-x-6 gap-y-2 border-t border-border px-5 py-4 md:grid-cols-[1fr_1.25fr]">
+    <li
+      style={revealStyle(index)}
+      className={`fedledger-reveal grid gap-x-6 gap-y-2 border-t border-border px-5 py-4 md:grid-cols-[1fr_1.25fr] ${
+        supported
+          ? 'shadow-[inset_2px_0_0_0_hsl(var(--verified)/0.6)]'
+          : 'shadow-[inset_2px_0_0_0_hsl(var(--border-strong))]'
+      }`}
+    >
       <div className="flex items-start gap-2.5">
         <span className="mt-0.5 shrink-0">
           {supported === null ? (
@@ -133,22 +144,30 @@ function LimitGroup({
 export function OverviewTab({
   rounds,
   verified,
+  snapshotActive,
   onLoadSnapshot,
+  onClearSnapshot,
 }: {
   rounds: LedgerRound[]
   verified: ReadonlySet<number>
+  /** True while the visible rounds are a frozen snapshot, not the live feed. */
+  snapshotActive: boolean
   onLoadSnapshot?: (rounds: LedgerRound[]) => void
+  onClearSnapshot?: () => void
 }) {
   const stats = summarise(rounds, verified)
   const datasetMeta = useDatasetMeta()
   const fileRef = useRef<HTMLInputElement>(null)
-  const [snapshotLoaded, setSnapshotLoaded] = useState(false)
   const [snapshotError, setSnapshotError] = useState<string | null>(null)
 
   /**
    * Shared by the file picker and the demo template, so both go through the
    * same parseRounds guard. A template that fails to parse would otherwise
    * look identical to a template that worked.
+   *
+   * A loaded snapshot replaces the live feed everywhere — header counter
+   * included — and persists to localStorage, so the first page reopens
+   * exactly where the demo was left.
    */
   const acceptSnapshot = useCallback(
     (text: string, label: string) => {
@@ -161,7 +180,6 @@ export function OverviewTab({
           return
         }
         onLoadSnapshot?.(parsed)
-        setSnapshotLoaded(true)
         setSnapshotError(null)
       } catch {
         setSnapshotError(`${label} is not valid JSON.`)
@@ -201,40 +219,67 @@ export function OverviewTab({
       <div className="mx-auto flex max-w-5xl flex-col gap-5 px-6 py-6">
 
         {/* ── what this page is ── */}
-        <Panel>
+        <Panel className="fedledger-hero">
+          <div className="fedledger-hero-sheen" aria-hidden />
           <PanelHead
             title="What this page shows"
             meta="the run, and where every number comes from"
           />
           <div className="flex flex-col gap-4 px-5 py-4">
-            <p className="text-sm text-muted-foreground">
+            <p className="max-w-3xl text-sm text-muted-foreground">
               Three organisations each fit a logistic regression on their own
               local rows, hand the server only their updated coefficients, and
               have every averaged round hashed and sealed into{' '}
-              <span className="font-mono text-foreground">FLAuditLog</span> — a
+              <span className="font-mono text-primary">FLAuditLog</span> — a
               Solidity contract on a local Hardhat chain. No raw row crosses a
               link, and nothing the chain has recorded can be edited
               afterwards.
             </p>
 
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-              {[
-                ['Overview', 'this page — claims, limits, snapshots'],
+            {/* auto-fit, not breakpoint-counted: two cards on a narrow
+                pane, four on a wide one, and no code change when a fifth
+                tab ever appears. */}
+            <div className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(190px,1fr))]">
+              {(
                 [
-                  'Federation',
-                  'one round, phase by phase, with what crosses each link',
-                ],
-                ['Ledger', 'every round with its receipt read from the chain'],
-                [
-                  'Verify',
-                  'recompute a round’s weight hash and compare it on-chain',
-                ],
-              ].map(([tab, what]) => (
+                  {
+                    tab: 'Overview',
+                    what: 'this page — claims, limits, snapshots',
+                    tone: 'fedledger-tone fedledger-tone-accent',
+                    dot: 'bg-primary',
+                  },
+                  {
+                    tab: 'Federation',
+                    what: 'one round, phase by phase, with what crosses each link',
+                    tone: 'fedledger-tone fedledger-tone-accent',
+                    dot: 'bg-primary',
+                  },
+                  {
+                    tab: 'Ledger',
+                    what: 'every round with its receipt read from the chain',
+                    tone: 'fedledger-tone fedledger-tone-neutral',
+                    dot: 'bg-border-strong',
+                  },
+                  {
+                    tab: 'Verify',
+                    what: 'recompute a round’s weight hash and compare it on-chain',
+                    tone: 'fedledger-tone fedledger-tone-verified',
+                    dot: 'bg-verified',
+                  },
+                ] as const
+              ).map(({ tab, what, tone, dot }, i) => (
                 <div
                   key={tab}
-                  className="border border-border bg-muted/40 px-3 py-2.5"
+                  style={revealStyle(i)}
+                  className={`fedledger-reveal border border-border bg-card/80 px-3 py-2.5 backdrop-blur-[1px] ${tone}`}
                 >
-                  <Eyebrow>{tab}</Eyebrow>
+                  <span className="flex items-center gap-1.5">
+                    <span
+                      aria-hidden
+                      className={`size-1.5 rounded-full ${dot}`}
+                    />
+                    <Eyebrow>{tab}</Eyebrow>
+                  </span>
                   <p className="mt-1 text-xs text-muted-foreground">{what}</p>
                 </div>
               ))}
@@ -252,11 +297,14 @@ export function OverviewTab({
         </Panel>
 
         {/* ── dataset in force ── */}
-        <div className="flex flex-wrap items-center justify-between gap-3">
+        <div
+          style={revealStyle(0)}
+          className="fedledger-reveal flex flex-wrap items-center justify-between gap-3"
+        >
           <div className="flex flex-wrap items-center gap-2">
             {datasetMeta ? (
               <>
-                <Token>{datasetMeta.name}</Token>
+                <Token tone="accent">{datasetMeta.name}</Token>
                 <span className="font-mono text-xs text-muted-foreground">
                   {datasetMeta.total_samples} samples · {datasetMeta.num_features} features · {datasetMeta.num_classes} classes
                 </span>
@@ -265,25 +313,36 @@ export function OverviewTab({
                 </span>
               </>
             ) : null}
-            {snapshotLoaded ? (
-              <span className="ml-1 rounded-sm border border-primary/40 bg-primary/10 px-1.5 py-0.5 font-mono text-xs text-primary">
+            {snapshotActive ? (
+              <span className="ml-1 inline-flex items-center gap-2 rounded-sm border border-primary/40 bg-primary/10 px-1.5 py-0.5 font-mono text-xs text-primary">
                 frozen snapshot
+                <button
+                  type="button"
+                  onClick={onClearSnapshot}
+                  className="underline underline-offset-2 hover:text-foreground"
+                  title="Discard the snapshot and return to the live feed"
+                >
+                  resume live
+                </button>
               </span>
             ) : null}
           </div>
         </div>
 
         {/* ── the two JSON files, documented rather than implied ── */}
-        <Panel>
+        <Panel style={revealStyle(1)} className="fedledger-reveal">
           <PanelHead
             title="The two JSON files"
             meta="what you can save, load and verify against"
           />
-          <div className="grid gap-px border-t border-border bg-border md:grid-cols-2">
+          <div className="grid gap-px border-t border-border bg-border [grid-template-columns:repeat(auto-fit,minmax(320px,1fr))]">
             {/* ── round snapshot ── */}
-            <div className="flex flex-col gap-3 bg-card px-5 py-4">
+            <div className="fedledger-tone fedledger-tone-accent flex flex-col gap-3 bg-card px-5 py-4">
               <div className="flex flex-wrap items-baseline justify-between gap-2">
-                <Eyebrow>round snapshot</Eyebrow>
+                <span className="flex items-center gap-1.5">
+                  <span aria-hidden className="size-1.5 rounded-full bg-primary" />
+                  <Eyebrow>round snapshot</Eyebrow>
+                </span>
                 <span className="font-mono text-2xs text-subtle">
                   saved and loaded by this page
                 </span>
@@ -379,9 +438,12 @@ export function OverviewTab({
             </div>
 
             {/* ── aggregated weights ── */}
-            <div className="flex flex-col gap-3 bg-card px-5 py-4">
+            <div className="fedledger-tone fedledger-tone-verified flex flex-col gap-3 bg-card px-5 py-4">
               <div className="flex flex-wrap items-baseline justify-between gap-2">
-                <Eyebrow>aggregated weights</Eyebrow>
+                <span className="flex items-center gap-1.5">
+                  <span aria-hidden className="size-1.5 rounded-full bg-verified" />
+                  <Eyebrow>aggregated weights</Eyebrow>
+                </span>
                 <span className="font-mono text-2xs text-subtle">
                   dropped or pasted into Verify
                 </span>
@@ -434,7 +496,7 @@ export function OverviewTab({
         </Panel>
 
         {empty ? (
-          <Panel>
+          <Panel style={revealStyle(2)} className="fedledger-reveal">
             <EmptyState title="no rounds recorded yet">
               Start the launcher to partition the dataset and run the first
               round. The files above explain what will appear here once it
@@ -445,41 +507,84 @@ export function OverviewTab({
           <>
 
             {/* ── figures ── */}
-            <div className="grid grid-cols-2 gap-px border border-border bg-border sm:grid-cols-3 lg:grid-cols-5">
-              <StatTile
-                label="organisations"
-                value={ORGANISATIONS.length}
-                hint={
-                  organisationRows(datasetMeta).join(' / ') + ' local rows'
-                }
-              />
-              <StatTile label="rounds" value={stats.total} />
-              <StatTile
-                label="sealed on-chain"
-                value={stats.logged}
-                tone={stats.unlogged > 0 ? 'destructive' : 'verified'}
-                hint={
-                  stats.unlogged > 0
-                    ? `${stats.unlogged} failed to log`
-                    : 'all logged'
-                }
-              />
-              <StatTile
-                label="best test accuracy"
-                value={stats.best === null ? '—' : `${stats.best.toFixed(1)}%`}
-                tone="accent"
-                hint={
-                  stats.meanDelta === null
-                    ? 'mean of held-out scores'
-                    : `${stats.meanDelta >= 0 ? '+' : ''}${stats.meanDelta.toFixed(1)}% across run`
-                }
-              />
-              <StatTile
-                label="verified"
-                value={stats.verified}
-                tone={stats.verified > 0 ? 'verified' : 'default'}
-                hint={`of ${stats.logged} sealed`}
-              />
+            {/* auto-fit, not breakpoint-counted: the row holds two tiles on
+                a narrow pane and five on a wide one, whatever the run
+                produced. Each tile reveals on its own stagger step. */}
+            <div className="grid gap-px border border-border bg-border [grid-template-columns:repeat(auto-fit,minmax(150px,1fr))]">
+              {(
+                [
+                  {
+                    key: 'organisations',
+                    node: (
+                      <StatTile
+                        label="organisations"
+                        value={ORGANISATIONS.length}
+                        hint={
+                          organisationRows(datasetMeta).join(' / ') +
+                          ' local rows'
+                        }
+                      />
+                    ),
+                  },
+                  {
+                    key: 'rounds',
+                    node: <StatTile label="rounds" value={stats.total} />,
+                  },
+                  {
+                    key: 'sealed',
+                    node: (
+                      <StatTile
+                        label="sealed on-chain"
+                        value={stats.logged}
+                        tone={stats.unlogged > 0 ? 'destructive' : 'verified'}
+                        hint={
+                          stats.unlogged > 0
+                            ? `${stats.unlogged} failed to log`
+                            : 'all logged'
+                        }
+                      />
+                    ),
+                  },
+                  {
+                    key: 'best',
+                    node: (
+                      <StatTile
+                        label="best test accuracy"
+                        value={
+                          stats.best === null
+                            ? '—'
+                            : `${stats.best.toFixed(1)}%`
+                        }
+                        tone="accent"
+                        hint={
+                          stats.meanDelta === null
+                            ? 'mean of held-out scores'
+                            : `${stats.meanDelta >= 0 ? '+' : ''}${stats.meanDelta.toFixed(1)}% across run`
+                        }
+                      />
+                    ),
+                  },
+                  {
+                    key: 'verified',
+                    node: (
+                      <StatTile
+                        label="verified"
+                        value={stats.verified}
+                        tone={stats.verified > 0 ? 'verified' : 'default'}
+                        hint={`of ${stats.logged} sealed`}
+                      />
+                    ),
+                  },
+                ]
+              ).map(({ key, node }, i) => (
+                <div
+                  key={key}
+                  style={revealStyle(i)}
+                  className="fedledger-reveal min-w-0"
+                >
+                  {node}
+                </div>
+              ))}
             </div>
 
             {/* ── the three claims ── */}
@@ -489,10 +594,11 @@ export function OverviewTab({
                 meta="each claim is checkable"
               />
               <ul>
-                {claimsFor(parameterCount(datasetMeta)).map((c) => (
+                {claimsFor(parameterCount(datasetMeta)).map((c, i) => (
                   <ClaimRow
                     key={c.claim}
                     {...c}
+                    index={i}
                     supported={stats.logged > 0 ? true : null}
                   />
                 ))}
@@ -515,43 +621,47 @@ export function OverviewTab({
                   rather than filled in.
                 </p>
 
-                <LimitGroup
-                  title="Not recorded anywhere"
-                  note="The backend and the contract both lack these. No amount of reading fixes them."
-                  rows={[
-                    {
-                      missing: 'per-round weights',
-                      why: 'Verification needs the global weights and nothing exposes them, so they must be dropped or pasted into the Verify tab.',
-                    },
-                    {
-                      missing: 'score on a common test set',
-                      why: `The ${stats.latest?.toFixed(1) ?? '—'}% figure is one global model scored by all three nodes, each on its own 20% held-out split of its local data, then averaged. The model is shared but the test rows are not, so this is not directly comparable to a single-model generalisation score on one common test set.`,
-                    },
-                    {
-                      missing: 'per-organisation accuracy',
-                      why: 'Aggregation stores only the mean, so an individual node’s contribution to a round cannot be checked afterwards.',
-                    },
-                  ]}
-                />
+                <div style={revealStyle(0)} className="fedledger-reveal">
+                  <LimitGroup
+                    title="Not recorded anywhere"
+                    note="The backend and the contract both lack these. No amount of reading fixes them."
+                    rows={[
+                      {
+                        missing: 'per-round weights',
+                        why: 'Verification needs the global weights and nothing exposes them, so they must be dropped or pasted into the Verify tab.',
+                      },
+                      {
+                        missing: 'score on a common test set',
+                        why: `The ${stats.latest?.toFixed(1) ?? '—'}% figure is one global model scored by all three nodes, each on its own 20% held-out split of its local data, then averaged. The model is shared but the test rows are not, so this is not directly comparable to a single-model generalisation score on one common test set.`,
+                      },
+                      {
+                        missing: 'per-organisation accuracy',
+                        why: 'Aggregation stores only the mean, so an individual node’s contribution to a round cannot be checked afterwards.',
+                      },
+                    ]}
+                  />
+                </div>
 
-                <LimitGroup
-                  title="On chain, read on demand"
-                  note="Present in the contract but absent from the results file. Open a round in the Ledger tab and these populate from the node."
-                  rows={[
-                    {
-                      missing: 'block number · gas used',
-                      why: 'Read from the transaction that sealed the round, shown in the chain receipt.',
-                    },
-                    {
-                      missing: 'timestamp',
-                      why: 'Stamped by the contract at log time, not written by the training script.',
-                    },
-                    {
-                      missing: 'participants',
-                      why: 'Stored as a string[], which Solidity omits from the public array getter, so the dashboard does not display it.',
-                    },
-                  ]}
-                />
+                <div style={revealStyle(1)} className="fedledger-reveal">
+                  <LimitGroup
+                    title="On chain, read on demand"
+                    note="Present in the contract but absent from the results file. Open a round in the Ledger tab and these populate from the node."
+                    rows={[
+                      {
+                        missing: 'block number · gas used',
+                        why: 'Read from the transaction that sealed the round, shown in the chain receipt.',
+                      },
+                      {
+                        missing: 'timestamp',
+                        why: 'Stamped by the contract at log time, not written by the training script.',
+                      },
+                      {
+                        missing: 'participants',
+                        why: 'Stored as a string[], which Solidity omits from the public array getter, so the dashboard does not display it.',
+                      },
+                    ]}
+                  />
+                </div>
               </div>
             </Panel>
 

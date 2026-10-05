@@ -15,7 +15,9 @@ import { TrainingTab } from '@/components/tabs/training'
 import { VerifyTab } from '@/components/tabs/verify'
 import { useRoundFeed } from '@/hooks/use-round-feed'
 import type { FeedStatus } from '@/hooks/use-round-feed'
+import { parseRounds, type LedgerRound } from '@/lib/ledger'
 import { cn } from '@/lib/utils'
+import { useCallback, useState } from 'react'
 
 const TABS = [
   { id: 'overview', label: 'Overview', Icon: BookOpen },
@@ -35,9 +37,59 @@ function feedTone(status: FeedStatus, usingMock: boolean) {
   return 'idle' as const
 }
 
+const SNAPSHOT_STORAGE_KEY = 'fedledger:snapshot-v1'
+
+/**
+ * A frozen snapshot survives reloads, so a demo pauses exactly where it
+ * was left. Stored as the raw [round, accuracy, txHash] triples — the same
+ * shape round_results.json uses — and re-parsed on the way back in, so a
+ * stale or hand-edited value can never crash the feed.
+ */
+function loadSnapshot(): LedgerRound[] | null {
+  try {
+    const raw = window.localStorage.getItem(SNAPSHOT_STORAGE_KEY)
+    if (!raw) return null
+    const parsed = parseRounds(JSON.parse(raw))
+    return parsed.length > 0 ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+function saveSnapshotStorage(rounds: LedgerRound[]): void {
+  try {
+    window.localStorage.setItem(
+      SNAPSHOT_STORAGE_KEY,
+      JSON.stringify(rounds.map((r) => [r.round, r.accuracy, r.txHash])),
+    )
+  } catch {
+    /* storage blocked — the session value still applies */
+  }
+}
+
+function clearSnapshotStorage(): void {
+  try {
+    window.localStorage.removeItem(SNAPSHOT_STORAGE_KEY)
+  } catch {
+    /* nothing persisted, nothing to clear */
+  }
+}
+
 export function App() {
   const { rounds, status, usingMock, verified, markVerified } = useRoundFeed()
-  const logged = rounds.filter((r) => r.onChain).length
+  const [snapshot, setSnapshot] = useState<LedgerRound[] | null>(loadSnapshot)
+  const visibleRounds = snapshot ?? rounds
+  const logged = visibleRounds.filter((r) => r.onChain).length
+
+  const handleLoadSnapshot = useCallback((parsed: LedgerRound[]) => {
+    setSnapshot(parsed)
+    saveSnapshotStorage(parsed)
+  }, [])
+
+  const handleClearSnapshot = useCallback(() => {
+    setSnapshot(null)
+    clearSnapshotStorage()
+  }, [])
 
   return (
     <TooltipProvider>
@@ -62,9 +114,14 @@ export function App() {
             <span className="font-mono text-xs text-muted-foreground">
               round{' '}
               <span className="text-foreground">
-                {rounds.length ? rounds[rounds.length - 1]!.round : 0}
+                {visibleRounds.length
+                  ? visibleRounds[visibleRounds.length - 1]!.round
+                  : 0}
               </span>{' '}
-              / {rounds.length}
+              / {visibleRounds.length}
+              {snapshot ? (
+                <span className="ml-2 text-primary">frozen</span>
+              ) : null}
             </span>
           </div>
         </header>
@@ -99,16 +156,22 @@ export function App() {
           </TabsList>
 
           <TabsContent value="overview" className="flex min-h-0 flex-col overflow-hidden">
-            <OverviewTab rounds={rounds} verified={verified} />
+            <OverviewTab
+              rounds={visibleRounds}
+              verified={verified}
+              snapshotActive={snapshot !== null}
+              onLoadSnapshot={handleLoadSnapshot}
+              onClearSnapshot={handleClearSnapshot}
+            />
           </TabsContent>
           <TabsContent value="training" className="flex min-h-0 flex-col overflow-hidden">
-            <TrainingTab rounds={rounds} verified={verified} usingMock={usingMock} />
+            <TrainingTab rounds={visibleRounds} verified={verified} usingMock={usingMock} />
           </TabsContent>
           <TabsContent value="audit" className="flex min-h-0 flex-col overflow-hidden">
-            <AuditTab rounds={rounds} verified={verified} />
+            <AuditTab rounds={visibleRounds} verified={verified} />
           </TabsContent>
           <TabsContent value="verify" className="flex min-h-0 flex-col overflow-hidden">
-            <VerifyTab rounds={rounds} onVerified={markVerified} />
+            <VerifyTab rounds={visibleRounds} onVerified={markVerified} />
           </TabsContent>
         </Tabs>
       </div>
