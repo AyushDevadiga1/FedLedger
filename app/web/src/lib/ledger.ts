@@ -209,13 +209,78 @@ function isFlatVector(v: unknown): v is number[] {
   return Array.isArray(v) && v.every((n) => typeof n === 'number' && Number.isFinite(n))
 }
 
-export function parseWeights(text: string): WeightPayload | { error: string } {
-  let parsed: unknown
+function tryParseJSON(text: string): { parsed: unknown } | null {
   try {
-    parsed = JSON.parse(text)
+    return { parsed: JSON.parse(text) }
   } catch {
-    return { error: 'not valid JSON' }
+    return null
   }
+}
+
+/**
+ * Coerce the shapes people actually paste out of a Python session into JSON
+ * before parsing.
+ *
+ * The Verify box is where a user drops weights they computed themselves, and
+ * those come from `print(global_weights)`, a sklearn model's `coef_`, or a dict
+ * they built by hand — none of which is JSON. Answering that with "not valid
+ * JSON" is a dead end: the numbers are right there, only the syntax differs. So
+ * the wrappers come off here: `np.float64(x)` and `array([[...]])` are unwrapped,
+ * single quotes and Python literals are translated, trailing commas removed.
+ * This only runs after a strict parse has already failed, so legitimate JSON is
+ * never touched — which is also why dropping every paren is safe: a JSON
+ * weight payload contains none.
+ */
+function coerceWeightsText(text: string): string {
+  let out = text.trim()
+  if (out === '') return out
+
+  // numpy / stdlib wrappers: np.float64(0.5), array([[..]])
+  out = out.replace(/\b(?:np|numpy|jnp|torch|tf)\s*\.\s*\w+\s*\(/g, '(')
+  out = out.replace(/\b(?:array|ndarray)\s*\(/g, '(')
+  out = out.replace(/[()]/g, '')
+
+  // Python literals. Only translated when the text has no double quotes yet,
+  // so a real string containing an apostrophe is never mangled.
+  if (!out.includes('"')) out = out.replace(/'/g, '"')
+  out = out
+    .replace(/\bTrue\b/g, 'true')
+    .replace(/\bFalse\b/g, 'false')
+    .replace(/\bNone\b/g, 'null')
+
+  // trailing commas, with whatever whitespace sits between it and the closer
+  out = out.replace(/,\s*([\]}])/g, '$1')
+
+  return out
+}
+
+/** sklearn exports these as objects rather than the pair the ledger hashes. */
+function fromAttributeObject(parsed: Record<string, unknown>): WeightPayload | null {
+  const coef = parsed.coef ?? parsed.coef_
+  const intercept = parsed.intercept ?? parsed.intercept_
+  if (coef === undefined || intercept === undefined) return null
+  return [coef, intercept] as unknown as WeightPayload
+}
+
+export function parseWeights(text: string): WeightPayload | { error: string } {
+  if (text.trim() === '') return { error: 'expected [coef_matrix, intercept_vector]' }
+
+  // Strict first: valid JSON is passed through untouched.
+  const strict = tryParseJSON(text)
+  const parsed = strict ? strict.parsed : tryParseJSON(coerceWeightsText(text))?.parsed
+
+  if (parsed === undefined) return { error: 'not valid JSON' }
+
+  if (parsed && !Array.isArray(parsed) && typeof parsed === 'object') {
+    const fromObject = fromAttributeObject(parsed as Record<string, unknown>)
+    if (fromObject === null) {
+      return { error: 'expected [coef_matrix, intercept_vector]' }
+    }
+    const serialised = JSON.stringify(fromObject)
+    if (typeof serialised !== 'string') return { error: 'weights are not JSON-serialisable' }
+    return parseWeights(serialised)
+  }
+
   if (!Array.isArray(parsed) || parsed.length === 0) {
     return { error: 'expected [coef_matrix, intercept_vector]' }
   }

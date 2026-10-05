@@ -81,3 +81,32 @@ export function downloadTemplate(url: string, name: string): void {
   a.download = name
   a.click()
 }
+
+/**
+ * Reduce a downloaded weights template to the bare `[coef, intercept]` text
+ * the Verify box wants.
+ *
+ * The file is a JSON *object* — `_comment` keys document the format, and the
+ * payload sits under `"weights"`. `parseWeights` accepts only a top-level
+ * array, so the wrapper has to come off here rather than being stripped by
+ * regex: the comment keys are indented, a `^_" pattern never matches them,
+ * and the user-facing symptom is a parse error on a file this app just
+ * handed them. Parsed structurally, with the error reported verbatim.
+ */
+export function weightsFromTemplate(text: string): string | { error: string } {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text)
+  } catch {
+    return { error: 'the downloaded template is not valid JSON' }
+  }
+  if (Array.isArray(parsed)) return JSON.stringify(parsed, null, 2)
+  if (parsed && typeof parsed === 'object' && 'weights' in parsed) {
+    const weights = (parsed as { weights: unknown }).weights
+    if (Array.isArray(weights)) return JSON.stringify(weights, null, 2)
+    return { error: 'the "weights" entry is not an array' }
+  }
+  return {
+    error: 'template has neither a top-level array nor a "weights" entry',
+  }
+}

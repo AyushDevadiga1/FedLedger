@@ -23,6 +23,7 @@ import {
 import {
   downloadTemplate,
   fetchTemplate,
+  weightsFromTemplate,
   WEIGHT_TEMPLATES,
 } from '@/lib/templates'
 
@@ -35,7 +36,14 @@ export function VerifyTab({
 }) {
   // Only rounds that actually logged can be verified, so the picker is
   // built from those rather than from the raw round list.
-  const verifiable = useMemo(() => rounds.filter((r) => r.onChain), [rounds])
+  const verifiable = useMemo(
+    () =>
+      rounds.filter(
+        (r): r is LedgerRound & { chainIndex: number } =>
+          r.onChain && r.chainIndex !== null,
+      ),
+    [rounds],
+  )
 
   const [chainIndex, setChainIndex] = useState('')
   const [weights, setWeights] = useState('')
@@ -46,11 +54,23 @@ export function VerifyTab({
   const parsed = weights.trim() ? parseWeights(weights) : null
   const parseError = parsed && !Array.isArray(parsed) ? parsed.error : null
 
-  const target = verifiable.find((r) => r.chainIndex === Number(chainIndex))
+  /**
+   * The index actually in force: whatever is typed, or the first sealed
+   * round while the box is untouched. Left empty, the box used to keep
+   * Compare disabled for a reason nothing on screen explained, so pasting
+   * weights by hand got the user nowhere. Derived during render rather than
+   * written into state, so it stays correct as rounds arrive.
+   */
+  const activeIndex =
+    chainIndex !== ''
+      ? chainIndex
+      : String(verifiable[0]?.chainIndex ?? '')
+
+  const target = verifiable.find((r) => r.chainIndex === Number(activeIndex))
 
   const run = async () => {
     if (!parsed || !Array.isArray(parsed)) return
-    const index = Number(chainIndex)
+    const index = Number(activeIndex)
     if (!Number.isInteger(index)) return
 
     setBusy(true)
@@ -99,7 +119,7 @@ export function VerifyTab({
                 id="chain-index"
                 inputMode="numeric"
                 placeholder={String(verifiable[0]?.chainIndex ?? 0)}
-                value={chainIndex}
+                value={activeIndex}
                 onChange={(e) => {
                   setChainIndex(e.target.value)
                   setOutcome(null)
@@ -153,19 +173,20 @@ export function VerifyTab({
                       onClick={async () => {
                         const text = await fetchTemplate(t.url)
                         if (typeof text !== 'string') {
-                          setOutcome({ status: 'error', chainIndex: Number(chainIndex) || 0, message: text.error })
+                          setOutcome({ status: 'error', chainIndex: Number(activeIndex) || 0, message: text.error })
                           return
                         }
-                        // Strip the _comment keys: they document the format for
-                        // a human reading the file, but parseWeights rejects a
-                        // 3-element array.
-                        const bare = text.trim().replace(/^_\w+".*$/gm, '').replace(/,\s*([\]}])/g, '$1')
+                        // The file wraps [coef, intercept] in an object with
+                        // _comment documentation; take it back to the bare
+                        // array the parser expects.
+                        const bare = weightsFromTemplate(text)
+                        if (typeof bare !== 'string') {
+                          setOutcome({ status: 'error', chainIndex: Number(activeIndex) || 0, message: bare.error })
+                          return
+                        }
                         setWeights(bare)
                         setDroppedName(t.name)
                         setOutcome(null)
-                        if (!chainIndex && verifiable.length > 0) {
-                          setChainIndex(String(verifiable[0]!.chainIndex))
-                        }
                       }}
                       className="rounded-sm border border-border-strong px-1.5 py-0.5 font-mono text-2xs text-primary transition-colors hover:border-primary/50 hover:bg-primary/10"
                       title={`Load ${t.blurb} — ${t.shape}`}
@@ -246,7 +267,7 @@ export function VerifyTab({
                   busy ||
                   parseError !== null ||
                   !Array.isArray(parsed) ||
-                  chainIndex.trim() === ''
+                  activeIndex.trim() === ''
                 }
               >
                 {busy ? 'checking…' : 'Compare hashes'}
@@ -255,7 +276,7 @@ export function VerifyTab({
               {/* Demonstrates the mismatch path without hand-editing JSON. */}
               <Button
                 variant="outline"
-                disabled={busy || !Array.isArray(parsed) || chainIndex.trim() === ''}
+                disabled={busy || !Array.isArray(parsed) || activeIndex.trim() === ''}
                 onClick={() => {
                   const altered = tamperWeights(weights)
                   if (altered === null) return
