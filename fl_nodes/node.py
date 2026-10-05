@@ -11,6 +11,7 @@ Run with: python fl_nodes/node.py --node 1     # Organisation A
 import os 
 import warnings
 import argparse
+import json
 
 import numpy as np
 import flwr as fl
@@ -30,6 +31,49 @@ NODE_CONFIG = {
     3: {"org": "OrgC", "data_dir": "data/node3"},
 }
 
+# Local training budget. FedAvg assumes each node runs a *converged* local
+# solve before averaging; `max_iter=1` gave a single L-BFGS step, so rounds
+# composited into a random walk and accuracy drifted down instead of
+# converging. 100 is sklearn's own default and converges iris/wine/
+# breast_cancer within a handful of iterations.
+LOCAL_MAX_ITER = 100
+
+
+def coef_rows(n_classes: int) -> int:
+    """Number of rows sklearn will give coef_ for a given class count.
+
+    Multiclass keeps one row per class, but a binary problem is coded as a
+    single row against the second class — sklearn reports classes_=[0, 1] with
+    coef_ of shape (1, n_features). Sizing coef_ from n_classes instead of
+    from this rule is what made every two-class dataset (breast_cancer)
+    mismatch its own declaration and fail the aggregation shape check.
+    """
+    return 1 if n_classes == 2 else n_classes
+
+# Path to the metadata written by data/generate_partitions.py. It carries the
+# *global* class count, which is the one thing a node cannot infer correctly
+# from its own shard (see init_parameters).
+DATASET_META_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "data",
+    "dataset_meta.json",
+)
+
+
+def load_global_num_classes() -> int:
+    """Read the total class count for the active dataset.
+
+    Returns None when the metadata is missing, which leaves the caller to
+    fall back to what its own shard can see.
+    """
+    try:
+        with open(DATASET_META_PATH, "r", encoding="utf-8") as fh:
+            meta = json.load(fh)
+        count = meta.get("num_classes")
+        return int(count) if count else None
+    except (OSError, ValueError, TypeError):
+        return None
+
 
 class FedLedgerClient(fl.client.NumPyClient):
     """
@@ -37,13 +81,16 @@ class FedLedgerClient(fl.client.NumPyClient):
     Each node instantiates this with its own private data partition.
     """
 
-    def __init__(self, node_id: str, X_train, y_train, X_test, y_test):
+    def __init__(self, node_id: str, X_train, y_train, X_test, y_test,
+                 num_classes: int | None = None):
         """
         Initialise client with private data.
         node_id: string identifier e.g. "OrgA", "OrgB", "OrgC"
         X_train, y_train: private training data — never leaves this node
         X_test, y_test: local evaluation data
-        TODO: store all parameters as instance variables.
+        num_classes: total class count for the whole dataset. Pass this when
+                     the local shard may not contain every class; see
+                     init_parameters for why guessing it locally is unsafe.
         """
         self.node_id = node_id
 
@@ -52,20 +99,33 @@ class FedLedgerClient(fl.client.NumPyClient):
         self.y_train = y_train
         self.y_test = y_test
 
-        self.model = LogisticRegression(penalty="l2", max_iter=1, warm_start=True)
+        self.num_classes = num_classes or load_global_num_classes()
+        self.local_classes = np.unique(y_train)
+
+        self.model = LogisticRegression(
+            penalty="l2", max_iter=LOCAL_MAX_ITER, warm_start=True
+        )
 
         self.init_parameters()
     
     def init_parameters(self,**kwargs):
         """
         Intitializes the model weights as zero for the model while instantiation.
+
+        The class count must describe the *whole* dataset, not this shard.
+        If coef_ is built with fewer rows than the other nodes use, FedAvg
+        adds arrays of different shapes and dies; and if this shard happens
+        to lack a class that others have, its locally fitted coef_ comes back
+        narrower still. So prefer the global count from dataset_meta.json and
+        fall back to the shard only when that metadata is unavailable.
         """
-        n_classes = len(np.unique(self.y_train))
+        n_classes = self.num_classes or len(self.local_classes)
         n_features = self.X_train.shape[1]
+        n_rows = coef_rows(n_classes)
 
         self.model.classes_ = np.arange(n_classes)
-        self.model.coef_ = np.zeros((n_classes,n_features))
-        self.model.intercept_ = np.zeros(n_classes)
+        self.model.coef_ = np.zeros((n_rows,n_features))
+        self.model.intercept_ = np.zeros(n_rows)
         
 
     def get_parameters(self,config : dict,**kwargs) -> List[np.ndarray]:
@@ -84,7 +144,14 @@ class FedLedgerClient(fl.client.NumPyClient):
         Set model weights from a list of numpy arrays.
         Called by Flower server to send updated global weights back to node.
         TODO: assign parameters[0] to model.coef_, parameters[1] to model.intercept_.
+
+        The incoming shapes must match what init_parameters built. A mismatch
+        here means this node's idea of the class count disagrees with the
+        server's, which would otherwise surface much later as an opaque
+        broadcast error inside FedAvg.
         """
+        self._assert_aggregatable(parameters)
+
         self.model.coef_ = parameters[0]
 
         if self.model.fit_intercept :
@@ -107,19 +174,47 @@ class FedLedgerClient(fl.client.NumPyClient):
             self.model.fit(self.X_train, self.y_train)
             print(f'[{self.node_id}] Training completed !!!')
 
+        weights = self.get_parameters({})
+
+        # sklearn rebuilds coef_ to match the classes actually present in
+        # y_train, so a shard missing a class returns a narrower array than
+        # the other nodes and the server's weighted sum raises on shape
+        # mismatch. Fail loudly with the reason instead of letting the
+        # aggregate blow up several layers away.
+        self._assert_aggregatable(weights)
+
         # Score on the held-out test split — not the training set.
         # Training-set accuracy is always inflated and would make the
         # blockchain audit trail meaningless.
         accuracy = self.model.score(self.X_test, self.y_test)
 
-        return (self.get_parameters({}), len(self.X_train), {"accuracy": accuracy})
+        return (weights, len(self.X_train), {"accuracy": accuracy})
+
+    def _assert_aggregatable(self, weights: List[np.ndarray]) -> None:
+        """Verify these weights can be averaged with every other node's."""
+        n_classes = self.num_classes or len(self.local_classes)
+        expected = coef_rows(n_classes)
+
+        if weights[0].shape[0] != expected:
+            raise RuntimeError(
+                f'[{self.node_id}] local fit produced coef_ with '
+                f'{weights[0].shape[0]} row(s) but this dataset needs '
+                f'{expected} for {n_classes} class(es) — this shard only holds '
+                f'{list(self.local_classes)}. Re-generate the partitions so '
+                f'every node sees every class (data/generate_partitions.py), '
+                f'then re-run.'
+            )
             
 
     def evaluate(self, parameters, config=None,**kwargs) -> Tuple[float, int, Dict]:
         """
-        Evaluate global model on local test data.
+        Score the global model on local held-out data.
         Returns: (loss, num_examples, metrics_dict)
-        TODO: compute accuracy on local test set after setting parameters.
+
+        This is the score the server seals on-chain. It runs on the aggregated
+        parameters the server broadcasts here, not on this node's own local
+        model, so what gets recorded describes the global model. Only the score
+        and the count travel back — the rows never leave the node.
         """
         self.set_parameters(parameters)
         loss =  log_loss(self.y_test,self.model.predict_proba(self.X_test))
@@ -180,6 +275,13 @@ def main():
     config = NODE_CONFIG[args.node]
     print(f"Starting {config['org']} node with data from {config['data_dir']}...")
 
+    # A shard that misses a class cannot participate in FedAvg, so report it
+    # here with the actual remedy rather than letting the first round fail
+    # deep inside the aggregation step.
+    global_classes = load_global_num_classes()
+    if global_classes:
+        print(f"  dataset declares {global_classes} classes")
+
     # TODO:
     #   1. Call load_node_data(args.node) to get the private partition
     #   2. Instantiate FedLedgerClient with node_id=config["org"] and the data
@@ -201,7 +303,8 @@ def main():
         X_train=X_train,
         y_train=y_train,
         X_test=X_test,
-        y_test=y_test
+        y_test=y_test,
+        num_classes=global_classes
     )
 
     # 3. Modern Flower orchestration interface execution block
