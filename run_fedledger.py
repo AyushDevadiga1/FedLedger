@@ -48,14 +48,32 @@ DASHBOARD_PORT = int(os.environ.get('FEDLEDGER_DASHBOARD_PORT', 5173))
 DASHBOARD_URL  = f'http://127.0.0.1:{DASHBOARD_PORT}'
 
 
-def spawn(cmd, cwd=None, env=None):
-    """Start a background subprocess, suppress its output."""
+def spawn(cmd, cwd=None, env=None, name='proc'):
+    """Start a background subprocess, sending its output to a per-process log.
+
+    This used to discard stdout/stderr outright, which made the FL stack
+    impossible to diagnose: a node that crashed on startup looked identical
+    to one that was merely quiet, and Python buffers when its output is not a
+    tty, so even a working run showed nothing until it exited. Each process
+    now writes to logs/<name>.log, unbuffered, so progress is visible while
+    training is still going.
+    """
+    log_dir = ROOT / 'logs'
+    log_dir.mkdir(exist_ok=True)
+
+    child_env = os.environ.copy() if env is None else env
+    # PYTHONUNBUFFERED matters more than PYTHONIOENCODING here: without it the
+    # child buffers and a hung round looks like a silent one.
+    child_env['PYTHONUNBUFFERED'] = '1'
+    child_env['PYTHONIOENCODING'] = 'utf-8'
+
+    handle = open(log_dir / f'{name}.log', 'w', encoding='utf-8', errors='replace')
     return subprocess.Popen(
         cmd,
         cwd=str(cwd or ROOT),
-        env=env,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        env=child_env,
+        stdout=handle,
+        stderr=subprocess.STDOUT,
     )
 
 
@@ -190,7 +208,7 @@ def main():
 
     # 2. Hardhat node
     print('[2/8] Starting Hardhat local Ethereum node…')
-    procs.append(spawn([NPX, 'hardhat', 'node'], cwd=BC))
+    procs.append(spawn([NPX, 'hardhat', 'node'], cwd=BC, name='hardhat'))
     if not wait_for_port(8545, timeout=30):
         print('  ✗ Hardhat node did not open :8545')
         shutdown()
@@ -215,7 +233,8 @@ def main():
 
     # 4. Dashboard HTTP server
     print(f'[4/8] Starting dashboard server on {DASHBOARD_URL}…')
-    procs.append(spawn([PY, str(APP / 'dashboard_server.py')], cwd=ROOT, env=py_env))
+    procs.append(spawn([PY, str(APP / 'dashboard_server.py')], cwd=ROOT, env=py_env,
+                      name='dashboard'))
     if not wait_for_port(DASHBOARD_PORT, timeout=15):
         print(f'  ✗ dashboard server did not open :{DASHBOARD_PORT}')
         shutdown()
@@ -224,19 +243,30 @@ def main():
     # 5. FL Server — run as a module from the root so `fl_server.*` imports work
     print('[5/8] Starting FL Server…')
     procs.append(spawn([PY, '-m', 'fl_server.server', '--rounds', str(args.rounds)],
-                       cwd=ROOT, env=py_env))
+                       cwd=ROOT, env=py_env, name='fl-server'))
+    # Wait for the Flower gRPC server to actually bind. Without this the nodes
+    # below start first, get connection-refused on :8080, and exit — so the
+    # run looked alive (ports open, launcher idle) while no round ever
+    # executed and round_results.json was never written.
+    if not wait_for_port(8080, timeout=45):
+        print('  ✗ Flower server did not open :8080 — see logs/fl-server.log')
+        shutdown()
+    print('  ✓ Flower server listening on :8080')
 
     # 6-8. FL Nodes
     print(f'[6/8] Starting 3 FL nodes (OrgA, OrgB, OrgC), {args.rounds} rounds…')
     for node_id in [1, 2, 3]:
         procs.append(spawn([PY, str(ROOT / 'fl_nodes' / 'node.py'),
-                            '--node', str(node_id)], cwd=ROOT, env=py_env))
+                            '--node', str(node_id)], cwd=ROOT, env=py_env,
+                            name=f'node{node_id}'))
         time.sleep(0.5)
 
     # 9. Verify server
     print('[7/8] Starting verify API server…')
-    procs.append(spawn([PY, str(APP / 'verify_server.py')], cwd=ROOT, env=py_env))
-    wait_for_port(8088, timeout=10)
+    procs.append(spawn([PY, str(APP / 'verify_server.py')], cwd=ROOT, env=py_env,
+                       name='verify'))
+    if not wait_for_port(8088, timeout=15):
+        print('  ✗ verify server did not open :8088 — see logs/verify.log')
 
     # 10. Open dashboard
     if not args.no_ui:
@@ -250,6 +280,7 @@ def main():
     print(f'    dashboard  {DASHBOARD_URL}')
     print(f'    chain      http://127.0.0.1:8545')
     print(f'    verify     http://127.0.0.1:8088/verify')
+    print(f'    logs       {ROOT / "logs"}/  (tail -f logs/fl-server.log)')
     print()
 
     # Keep process alive

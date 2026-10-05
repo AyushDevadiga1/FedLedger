@@ -27,5 +27,9 @@ app/deprecated
 # Local tooling
 .qodo/
 
-# Logs
+# Logs — run_fedledger.py writes logs/*.log, one per child process
 /logs
+
+# Runtime artifacts written during a run, not source
+app/round_results.json
+data/dataset_meta.json
