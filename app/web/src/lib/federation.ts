@@ -45,3 +45,21 @@ export function organisationRows(meta: DatasetMeta | null): number[] {
 export function TOTAL_LOCAL_ROWS(rows: number[] = organisationRows(null)): number {
   return rows.reduce((sum, n) => sum + n, 0)
 }
+
+/**
+ * How many numbers one node ships per update: the coefficient matrix plus
+ * the intercept vector.
+ *
+ * Multinomial logistic regression stores one coef row per class; binary
+ * stores a single row, so the class count collapses to 1 either way. This is
+ * the count behind the "n floats, no rows" claim, derived from the active
+ * dataset instead of typed in — the old literal 15 was correct only on iris
+ * and became wrong the moment the launcher was pointed at breast_cancer
+ * (31 floats) or digits (650).
+ */
+export function parameterCount(meta: DatasetMeta | null): number {
+  const features = meta?.num_features ?? 4
+  const classes = meta?.num_classes ?? 3
+  const coefRows = classes > 2 ? classes : 1
+  return coefRows * features + coefRows
+}

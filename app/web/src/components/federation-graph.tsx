@@ -18,26 +18,62 @@ import { memo, useEffect, useMemo, useRef } from 'react'
 import { Maximize2, Minus, Plus, ShieldCheck } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
-import { formatAccuracy } from '@/lib/ledger'
+import { formatAccuracy, shortHash, type LedgerRound } from '@/lib/ledger'
 import { directionFor, type FlowDirection, type PhaseId } from '@/lib/phases'
 import { ORGANISATIONS } from '@/lib/federation'
 
+/* ── layout ───────────────────────────────────────────────────────────
+   Wide and shallow rather than square: the panel it renders into is
+   landscape, and a diagram whose bounding box matches the panel gets the
+   highest fit-view zoom. The old 230px pitch left the whole thing drawn
+   small with dead margin on both sides. */
+
+const ORG_PITCH = 300
+const ORG_W = 210
+const SERVER_W = 300
+const CHAIN_W = 470
+const ORG_Y = 0
+const SERVER_Y = 150
+const CHAIN_Y = 305
+/** Centre of the middle organisation — the server and chain hang off it. */
+const AXIS = ORG_PITCH + ORG_W / 2
+
 /* ── node data ─────────────────────────────────────────────────────── */
+
+/**
+ * What an organisation is doing at this moment, as one word. Derived from
+ * the phase rather than tracked per node, because there is a fixed cast of
+ * three and they always do the same thing at the same time.
+ */
+type OrgStatus = 'training' | 'uploading' | 'awaiting' | 'updated'
 
 interface OrgData extends Record<string, unknown> {
   name: string
   rows: number
-  accent: 'muted' | 'active' | 'verified'
+  status: OrgStatus
+  /** Draw the dashed privacy boundary: only while local rows exist inside. */
+  sealed: boolean
 }
 
 interface ServerData extends Record<string, unknown> {
   accuracy: number | null
   state: 'idle' | 'working'
+  /** One line naming what the server is doing right now. */
+  note: string
+}
+
+interface ChainEntry {
+  chainIndex: number
+  round: number
+  accuracy: number
+  txHash: string
 }
 
 interface ChainData extends Record<string, unknown> {
-  blocks: number
-  state: 'idle' | 'sealing'
+  /** Newest block first, as a ledger reads. */
+  entries: ChainEntry[]
+  /** Round being hashed this instant — drawn as an in-flight row, not a block. */
+  minting: number | null
 }
 
 const ORG_ICON: Record<string, string> = {
@@ -46,25 +82,38 @@ const ORG_ICON: Record<string, string> = {
   OrgC: 'M3 21h18M6 21V11m6 10V11m6 10V11M3 11h18L12 4 3 11Z',
 }
 
-const STATE_STROKE: Record<OrgData['accent'], string> = {
-  muted: 'border-border',
-  active: 'border-primary',
-  verified: 'border-verified',
+const STATUS_LABEL: Record<OrgStatus, string> = {
+  training: 'training on rows',
+  uploading: 'sending coefs',
+  awaiting: 'awaiting model',
+  updated: 'model updated',
+}
+
+const STATUS_TONE: Record<OrgStatus, string> = {
+  training: 'text-primary',
+  uploading: 'text-primary',
+  awaiting: 'text-subtle',
+  updated: 'text-verified',
+}
+
+const ORG_BORDER: Record<OrgStatus, string> = {
+  training: 'border-primary',
+  uploading: 'border-primary',
+  awaiting: 'border-border',
+  updated: 'border-verified',
 }
 
 /**
- * An organisation node. The row count and the "0 rows sent" marker are part
- * of the node, not the edge, because the claim being demonstrated is that the
- * data does not move — so the data has to be visibly still.
+ * An organisation node.
  *
- * While a node is training it is ringed by a dashed boundary. That ring is
- * the diagram's one piece of argument: it is the only thing standing between
- * the local shard and the wire, so it is drawn at the moment the shard is
- * most at risk and never animated as if it were decorative.
+ * The row count and the "0 rows sent" claim are part of the node, not the
+ * edge, because the claim is that data does not move — a still label is the
+ * evidence. While local rows exist inside, the node carries a dashed
+ * boundary: that ring is the diagram's one argument, drawn at the moment the
+ * shard is most at risk.
  */
 function OrgNode({ data }: NodeProps<Node<OrgData, 'org'>>) {
-  const { name, rows, accent } = data
-  const sealed = accent === 'active'
+  const { name, rows, status, sealed } = data
 
   return (
     <div className="relative">
@@ -86,19 +135,19 @@ function OrgNode({ data }: NodeProps<Node<OrgData, 'org'>>) {
 
       <div
         className={cn(
-          'w-[190px] border bg-card px-3 py-2.5 transition-colors duration-300',
-          STATE_STROKE[accent],
+          'border bg-card px-3 py-2.5 transition-colors duration-300',
+          ORG_BORDER[status],
         )}
+        style={{ width: ORG_W }}
       >
-{/* Both org handles sit on the bottom edge because the server is
-            *below* them. They are split left/right and given explicit ids so
-            the outbound and inbound links take separate paths instead of
-            drawing over each other. */}
+        {/* Both handles sit on the bottom edge because the server is below.
+            They are split left/right and given explicit ids so the outbound
+            and inbound links take separate paths instead of overlapping. */}
         <Handle
           id="out"
           type="source"
           position={Position.Bottom}
-          style={{ left: '32%' }}
+          style={{ left: '30%' }}
         />
         <div className="flex items-start justify-between gap-2">
           <span className="font-mono text-sm font-medium text-foreground">
@@ -123,18 +172,33 @@ function OrgNode({ data }: NodeProps<Node<OrgData, 'org'>>) {
           </span>
           <span
             className={cn(
-              'font-mono text-xs',
-              accent === 'verified' ? 'text-verified' : 'text-subtle',
+              'flex items-center gap-1.5 font-mono text-xs transition-colors duration-300',
+              STATUS_TONE[status],
             )}
           >
-            {accent === 'verified' ? 'model updated' : '0 rows sent'}
+            {/* The two phases where something is genuinely happening on the
+                node get a live marker; the idle ones do not, so a pulse means
+                work rather than decoration. */}
+            {status === 'training' || status === 'uploading' ? (
+              <span
+                className="size-1.5 shrink-0 animate-pulse rounded-full bg-current"
+                aria-hidden
+              />
+            ) : null}
+            {STATUS_LABEL[status]}
+          </span>
+        </div>
+        <div className="mt-1 flex items-baseline justify-between gap-2 border-t border-border pt-1.5">
+          <span className="font-mono text-2xs text-subtle">records held</span>
+          <span className="font-mono text-2xs text-muted-foreground">
+            0 rows sent
           </span>
         </div>
         <Handle
           id="in"
           type="target"
           position={Position.Bottom}
-          style={{ left: '68%' }}
+          style={{ left: '70%' }}
         />
       </div>
     </div>
@@ -142,13 +206,14 @@ function OrgNode({ data }: NodeProps<Node<OrgData, 'org'>>) {
 }
 
 function ServerNode({ data }: NodeProps<Node<ServerData, 'server'>>) {
-  const { accuracy, state } = data
+  const { accuracy, state, note } = data
   return (
     <div
       className={cn(
-        'w-[240px] border bg-card px-4 py-3 transition-colors duration-300',
+        'border bg-card px-4 py-3 transition-colors duration-300',
         state === 'working' ? 'border-primary' : 'border-border',
       )}
+      style={{ width: SERVER_W }}
     >
       {/* 'in' and 'dist' both live on the top edge because the organisations
           sit above the server; 'chain' leaves downward to the ledger. Explicit
@@ -159,13 +224,13 @@ function ServerNode({ data }: NodeProps<Node<ServerData, 'server'>>) {
         id="in"
         type="target"
         position={Position.Top}
-        style={{ left: '32%' }}
+        style={{ left: '30%' }}
       />
       <Handle
         id="dist"
         type="source"
         position={Position.Top}
-        style={{ left: '68%' }}
+        style={{ left: '70%' }}
       />
       <div className="flex items-baseline justify-between gap-2">
         <span className="font-mono text-sm font-medium text-foreground">
@@ -186,51 +251,115 @@ function ServerNode({ data }: NodeProps<Node<ServerData, 'server'>>) {
           global test acc
         </span>
       </div>
+      <div className="mt-2 flex items-center justify-between gap-2 border-t border-border pt-2">
+        <span className="font-mono text-2xs text-subtle">weighted mean</span>
+        <span
+          className={cn(
+            'flex items-center gap-1.5 font-mono text-2xs transition-colors duration-300',
+            state === 'working' ? 'text-primary' : 'text-muted-foreground',
+          )}
+        >
+          {state === 'working' ? (
+            <span
+              className="size-1.5 shrink-0 animate-pulse rounded-full bg-current"
+              aria-hidden
+            />
+          ) : null}
+          {note}
+        </span>
+      </div>
       <Handle id="chain" type="source" position={Position.Bottom} />
     </div>
   )
 }
 
+/**
+ * The ledger.
+ *
+ * Sized to be read, not to be a decoration under the server: every sealed
+ * round is a row with its block number, accuracy and transaction hash, newest
+ * on top, and a row mounting for the first time drops in with the
+ * fedledger-slot overshoot — so a live run shows the chain being written one
+ * round at a time instead of a chip count jumping.
+ */
 function ChainNode({ data }: NodeProps<Node<ChainData, 'chain'>>) {
-  const { blocks, state } = data
+  const { entries, minting } = data
+
   return (
     <div
-      className={cn(
-        'w-[240px] border bg-card px-4 py-3 transition-colors duration-300',
-        state === 'sealing' ? 'border-primary' : 'border-border',
-      )}
+      className="border bg-card px-4 py-3 shadow-[0_18px_40px_-24px_rgb(0_0_0/0.9)]"
+      style={{ width: CHAIN_W }}
     >
-      <div className="flex items-baseline justify-between gap-2">
-        <span className="font-mono text-sm font-medium text-foreground">
-          FLAuditLog
+      <div className="flex items-baseline justify-between gap-3 border-b border-border pb-2">
+        <div className="flex items-baseline gap-2">
+          <span className="font-mono text-sm font-medium text-foreground">
+            FLAuditLog
+          </span>
+          <span className="font-mono text-2xs text-subtle">Hardhat :8545</span>
+        </div>
+        <span className="font-mono text-2xs text-muted-foreground">
+          {entries.length} block{entries.length === 1 ? '' : 's'} · append-only
         </span>
-        <span className="font-mono text-xs text-subtle">Hardhat :8545</span>
       </div>
-      <div className="mt-2 flex flex-wrap items-center gap-1.5 max-h-24 overflow-y-auto">
-        {blocks === 0 ? (
-          <span className="font-mono text-xs text-subtle">no blocks yet</span>
-        ) : (
-          Array.from({ length: blocks }, (_, i) => {
-            const isNewest = i === blocks - 1
-            const minting = state === 'sealing' && isNewest
-            return (
-              <span
-                key={i}
-                className={cn(
-                  'rounded-sm border px-1.5 py-0.5 font-mono text-xs',
-                  minting
-                    ? 'fedledger-slot border-primary bg-primary/10 text-primary'
-                    : 'border-border-strong text-muted-foreground',
-                )}
-              >
-                #{i + 1}
+
+      <div className="max-h-[168px] min-h-[74px] overflow-y-auto py-1">
+        <ul>
+          {minting !== null ? (
+            <li
+              key="minting"
+              className="flex items-baseline gap-3 border-b border-dashed border-primary/40 px-1 py-1.5"
+            >
+              <span className="font-mono text-xs text-primary">
+                #{entries.length + 1}
               </span>
-            )
-          })
-        )}
+              <span className="font-mono text-xs text-primary">
+                round {minting}
+              </span>
+              <span className="truncate font-mono text-2xs text-subtle">
+                sha256(global weights)…
+              </span>
+              <span className="ml-auto animate-pulse font-mono text-2xs text-primary">
+                hashing
+              </span>
+            </li>
+          ) : null}
+
+          {entries.length === 0 && minting === null ? (
+            <li className="px-1 py-4 text-center font-mono text-xs text-subtle">
+              no blocks yet — nothing has been sealed
+            </li>
+          ) : (
+            entries.map((entry) => (
+              <li
+                key={entry.chainIndex}
+                className="fedledger-slot flex items-baseline gap-3 border-b border-border/60 px-1 py-1.5 last:border-b-0"
+              >
+                <span className="font-mono text-xs text-muted-foreground">
+                  #{entry.chainIndex + 1}
+                </span>
+                <span className="font-mono text-xs text-foreground">
+                  round {entry.round}
+                </span>
+                <span className="font-mono text-xs text-primary">
+                  {formatAccuracy(entry.accuracy)}
+                </span>
+                <span
+                  className="truncate font-mono text-2xs text-subtle"
+                  title={entry.txHash}
+                >
+                  {shortHash(entry.txHash, 10, 8)}
+                </span>
+                <span className="ml-auto shrink-0 font-mono text-2xs text-subtle">
+                  sealed
+                </span>
+              </li>
+            ))
+          )}
+        </ul>
       </div>
-      <div className="mt-1.5 font-mono text-xs text-subtle">
-        append-only · no update or delete
+
+      <div className="mt-1.5 border-t border-border pt-1.5 font-mono text-2xs text-subtle">
+        no update, no delete, no reordering
       </div>
       <Handle id="in" type="target" position={Position.Top} />
     </div>
@@ -259,16 +388,29 @@ interface PayloadData extends Record<string, unknown> {
   tone: 'accent' | 'verified'
   /** Vertical nudge, in px, applied to the edge label. */
   labelDy?: number
+  /**
+   * How long to hold before this dot leaves, and how long the trip takes.
+   *
+   * Up-links are given a per-organisation delay so the three uploads go one
+   * after another down their own threads — which is what actually happens:
+   * each node ships its own update, they are not a single broadcast. The
+   * down-link has no delay because the server really does return the global
+   * model to everyone at once.
+   */
+  delayMs?: number
+  travelMs?: number
 }
 
 /**
  * The animated edge.
  *
  * Anime.js drives the payload dot straight on the DOM node rather than
- * through React state, so a replay does not re-render the graph sixty
- * times a second. `svg.createMotionPath` samples the already-computed
- * bezier, which keeps the dot exactly on the visible line instead of
- * approximating it with keyframes.
+ * through React state, so a replay does not re-render the graph sixty times a
+ * second. `svg.createMotionPath` samples the already-computed bezier, which
+ * keeps the dot exactly on the visible line instead of approximating it with
+ * keyframes. One pass per phase change: a looping dot on a phase that is
+ * still running looks like a screensaver, whereas a single trip reads as one
+ * thing being sent.
  */
 function PayloadEdgeBase({
   id,
@@ -295,7 +437,14 @@ function PayloadEdgeBase({
 
   const guideRef = useRef<SVGPathElement>(null)
   const dotRef = useRef<SVGCircleElement>(null)
-  const { live, tone, label, labelDy = 0 } = data ?? {}
+  const {
+    live,
+    tone,
+    label,
+    labelDy = 0,
+    delayMs = 0,
+    travelMs = 700,
+  } = data ?? {}
 
   useEffect(() => {
     const guide = guideRef.current
@@ -303,19 +452,19 @@ function PayloadEdgeBase({
     if (!guide || !dot || !live) return
 
     const { translateX, translateY } = svg.createMotionPath(guide)
+    const ramp = Math.min(160, Math.round(travelMs * 0.25))
 
     const instance = animate(dot, {
       translateX,
       translateY,
       opacity: [
         { to: 0, duration: 0 },
-        { to: 1, duration: 180 },
-        { to: 1, duration: 620 },
-        { to: 0, duration: 220 },
+        { to: 1, duration: ramp },
+        { to: 1, duration: Math.max(travelMs - ramp * 2, 60) },
+        { to: 0, duration: ramp },
       ],
-      duration: 1020,
-      delay: (_target, i) => (i ?? 0) * 130,
-      loop: true,
+      duration: travelMs,
+      delay: delayMs,
       ease: 'inOutQuad',
     })
 
@@ -323,10 +472,11 @@ function PayloadEdgeBase({
       instance.pause()
       instance.revert()
     }
-  }, [live])
+  }, [live, delayMs, travelMs])
 
   const active = live === true
-  const stroke = tone === 'verified' ? 'var(--color-verified)' : 'var(--color-primary)'
+  const stroke =
+    tone === 'verified' ? 'var(--color-verified)' : 'var(--color-primary)'
 
   return (
     <>
@@ -339,8 +489,9 @@ function PayloadEdgeBase({
         markerEnd={markerEnd}
         style={{
           stroke: active ? stroke : 'var(--color-border-strong)',
-          strokeWidth: active ? 1.5 : 1,
+          strokeWidth: active ? 2 : 1,
           strokeDasharray: active ? undefined : '3 4',
+          filter: active ? `drop-shadow(0 0 4px ${stroke})` : 'none',
           transition: 'stroke 300ms, stroke-width 300ms',
         }}
       />
@@ -348,7 +499,7 @@ function PayloadEdgeBase({
       {active ? (
         <circle
           ref={dotRef}
-          r="3.5"
+          r="4"
           cx="0"
           cy="0"
           fill={stroke}
@@ -394,11 +545,43 @@ const EDGE_TYPES = {
 
 const ORGS = ORGANISATIONS
 
+/** Milliseconds between one organisation's upload and the next's. */
+const UPLOAD_STAGGER_MS = 520
+/** One upload's travel time. Three of them plus the last trip must fit
+ *  inside PHASE_DURATION_MS.send, which is why send is the long phase. */
+const UPLOAD_TRAVEL_MS = 640
+const RETURN_TRAVEL_MS = 720
+const SEAL_TRAVEL_MS = 520
+
 export interface FederationGraphProps {
   phase: PhaseId | null
   accuracy: number | null
-  blocks: number
+  rounds: LedgerRound[]
+  /**
+   * Per-organisation local row counts, from dataset_meta.json. Falls back to
+   * the iris constants before metadata lands, but it must be passed once
+   * known — the diagram's whole claim is that these rows never move, so a
+   * row count that disagrees with the running dataset discredits it.
+   */
+  rows?: number[]
   className?: string
+}
+
+function serverNote(phase: PhaseId | null): string {
+  switch (phase) {
+    case 'train':
+      return 'waiting for 3 updates'
+    case 'send':
+      return 'receiving updates'
+    case 'aggregate':
+      return 'averaging 3 updates'
+    case 'seal':
+      return 'writing to ledger'
+    case 'distribute':
+      return 'shipping to 3 nodes'
+    default:
+      return 'idle · 3 nodes'
+  }
 }
 
 /**
@@ -409,51 +592,90 @@ export interface FederationGraphProps {
 export function useFederationGraph({
   phase,
   accuracy,
-  blocks,
+  rounds,
+  rows,
 }: FederationGraphProps) {
   const direction = directionFor(phase)
 
-  const orgAccent: OrgData['accent'] =
-    phase === 'train' ? 'active' : phase === 'distribute' ? 'verified' : 'muted'
+  const orgStatus: OrgStatus =
+    phase === 'train' || phase === 'send'
+      ? phase === 'train'
+        ? 'training'
+        : 'uploading'
+      : phase === 'distribute'
+        ? 'updated'
+        : 'awaiting'
+
+  const sealed = useMemo(
+    () =>
+      rounds.filter(
+        (r): r is LedgerRound & { chainIndex: number } =>
+          r.onChain && r.chainIndex !== null,
+      ),
+    [rounds],
+  )
+
+  /** The round the seal phase is currently writing, or null outside it. */
+  const minting = useMemo(() => {
+    if (phase !== 'seal') return null
+    const last = rounds[rounds.length - 1]
+    if (!last) return 1
+    return last.onChain ? last.round + 1 : last.round
+  }, [phase, rounds])
 
   const nodes = useMemo<Node[]>(
     () => [
       ...ORGS.map((org, i) => ({
         id: org.id,
         type: 'org' as const,
-        position: { x: i * 230, y: 0 },
-        data: { name: org.name, rows: org.rows, accent: orgAccent } satisfies OrgData,
+        position: { x: i * ORG_PITCH, y: ORG_Y },
+        data: {
+          name: org.name,
+          rows: rows?.[i] ?? org.rows,
+          status: orgStatus,
+          sealed: orgStatus === 'training' || orgStatus === 'uploading',
+        } satisfies OrgData,
       })),
       {
         id: 'server',
         type: 'server' as const,
-        position: { x: 205, y: 190 },
+        position: { x: AXIS - SERVER_W / 2, y: SERVER_Y },
         data: {
           accuracy,
-          state: phase === 'aggregate' ? ('working' as const) : ('idle' as const),
+          state:
+            phase === 'aggregate' || phase === 'seal'
+              ? ('working' as const)
+              : ('idle' as const),
+          note: serverNote(phase),
         } satisfies ServerData,
       },
       {
         id: 'chain',
         type: 'chain' as const,
-        position: { x: 205, y: 340 },
+        position: { x: AXIS - CHAIN_W / 2, y: CHAIN_Y },
         data: {
-          blocks,
-          state: phase === 'seal' ? ('sealing' as const) : ('idle' as const),
+          entries: [...sealed]
+            .reverse()
+            .map((r) => ({
+              chainIndex: r.chainIndex,
+              round: r.round,
+              accuracy: r.accuracy,
+              txHash: r.txHash,
+            })),
+          minting,
         } satisfies ChainData,
       },
     ],
-    [orgAccent, accuracy, blocks, phase],
+    [orgStatus, accuracy, sealed, minting, phase, rows],
   )
 
   const edges = useMemo<Edge[]>(() => {
     const list: Edge[] = []
 
     for (const [i, org] of ORGS.entries()) {
-      // Weights travelling up from the node to the aggregator. Each of the
-      // three carries an identical payload, so they share one label and it is
-      // nudged along the path per node — three copies of the same sentence at
-      // the same x is what made the old diagram look like one broken thread.
+      // Weights travelling up from the node to the aggregator, one
+      // organisation at a time: staggered so the three uploads read as three
+      // separate shipments down three separate threads rather than one glow.
       list.push({
         id: `${org.id}-up`,
         source: org.id,
@@ -468,15 +690,18 @@ export function useFederationGraph({
           color: direction === 'up' ? 'var(--color-primary)' : 'var(--color-border-strong)',
         },
         data: {
-          label: 'weights only · coef + intercept',
+          label: i === 0 ? 'coefs + intercept, no rows' : 'coefs + intercept',
           direction,
           lane: 'up',
           live: direction === 'up',
           tone: 'accent',
-          labelDy: -22 + i * 22,
+          labelDy: -26 + i * 26,
+          delayMs: i * UPLOAD_STAGGER_MS,
+          travelMs: UPLOAD_TRAVEL_MS,
         } satisfies PayloadData,
       })
-      // Global model travelling back down to the same organisation.
+      // Global model travelling back to every organisation simultaneously —
+      // same threads, no stagger, because the broadcast really is one fan-out.
       list.push({
         id: `${org.id}-down`,
         source: 'server',
@@ -492,12 +717,14 @@ export function useFederationGraph({
             direction === 'down' ? 'var(--color-verified)' : 'var(--color-border-strong)',
         },
         data: {
-          label: 'global model',
+          label: i === 0 ? 'global model → all 3' : 'global model',
           direction,
           lane: 'down',
           live: direction === 'down',
           tone: 'verified',
-          labelDy: -22 + i * 22,
+          labelDy: -26 + i * 26,
+          delayMs: 0,
+          travelMs: RETURN_TRAVEL_MS,
         } satisfies PayloadData,
       })
     }
@@ -525,6 +752,8 @@ export function useFederationGraph({
         lane: 'down',
         live: phase === 'seal',
         tone: 'accent',
+        delayMs: 60,
+        travelMs: SEAL_TRAVEL_MS,
       } satisfies PayloadData,
     })
 
@@ -567,7 +796,7 @@ function ZoomControls() {
         id="fed-fit-view"
         className={btn}
         title="Fit to canvas"
-        onClick={() => fitView({ padding: 0.16, duration: 300 })}
+        onClick={() => fitView({ padding: 0.1, duration: 300 })}
         aria-label="Fit view"
       >
         <Maximize2 className="size-3" />
@@ -582,6 +811,10 @@ function ZoomControls() {
  * Interaction is on by default: pan with mouse-drag, zoom with scroll wheel,
  * and the three toolbar buttons in the top-right corner give explicit control.
  * Nodes are not draggable or connectable — the topology is fixed.
+ *
+ * fitView starts the diagram as large as the panel allows rather than at 1:1
+ * and centred: on first load the old settings drew a third of the panel and
+ * left the rest as margin.
  */
 export function FederationCanvas(props: FederationGraphProps) {
   const { nodes, edges } = useFederationGraph(props)
@@ -594,7 +827,7 @@ export function FederationCanvas(props: FederationGraphProps) {
         nodeTypes={NODE_TYPES}
         edgeTypes={EDGE_TYPES}
         fitView
-        fitViewOptions={{ padding: 0.16, maxZoom: 1.5 }}
+        fitViewOptions={{ padding: 0.1, maxZoom: 1.4, minZoom: 0.2 }}
         nodesDraggable={false}
         nodesConnectable={false}
         elementsSelectable={false}

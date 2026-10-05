@@ -25,15 +25,15 @@ export const PHASES: Phase[] = [
     label: 'Train',
     payload: 'nothing leaves',
     detail:
-      'OrgA, OrgB and OrgC each fit a logistic regression on their own 50-row shard. The rows stay on the node.',
+      'OrgA, OrgB and OrgC each fit a logistic regression on their own local shard — an even third of the dataset. The rows stay on the node.',
   },
   {
     id: 'send',
     step: 2,
     label: 'Send',
-    payload: '15 floats per node',
+    payload: 'coef + intercept only',
     detail:
-      'Each node ships only its updated coefficients and intercept. No records, no gradients, nothing recoverable.',
+      'OrgA, then OrgB, then OrgC each ship only its updated coefficients and intercept down its own link — one update at a time. No records, no gradients, nothing recoverable.',
   },
   {
     id: 'aggregate',
@@ -57,7 +57,7 @@ export const PHASES: Phase[] = [
     label: 'Distribute',
     payload: 'global model',
     detail:
-      'The aggregated model goes back out to all three nodes and becomes the next round’s starting point.',
+      'The aggregated model goes back out to all three nodes at once, over the same links, and becomes the next round’s starting point.',
   },
 ]
 
@@ -79,11 +79,18 @@ export function directionFor(phase: PhaseId | null): FlowDirection {
   }
 }
 
-/** Milliseconds each phase holds before advancing, at 1× speed. */
+/**
+ * Milliseconds each phase holds before advancing, at 1× speed.
+ *
+ * `send` is deliberately the longest: the graph sends the three uploads one
+ * organisation after another down their own threads, so the phase has to
+ * outlast two staggers plus the final trip or the last node gets cut off
+ * mid-flight. Every other phase holds roughly one animation of its own.
+ */
 export const PHASE_DURATION_MS: Record<PhaseId, number> = {
-  train: 1400,
-  send: 1100,
+  train: 1300,
+  send: 1750,
   aggregate: 1300,
-  seal: 1000,
-  distribute: 1100,
+  seal: 1150,
+  distribute: 1250,
 }

@@ -17,11 +17,26 @@ import { Button } from '@/components/ui/button'
 import { Slider } from '@/components/ui/slider'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useReplay } from '@/hooks/use-replay'
+import { useDatasetMeta } from '@/hooks/use-dataset-meta'
 import { formatAccuracy, type LedgerRound } from '@/lib/ledger'
-import { PHASES } from '@/lib/phases'
+import { organisationRows, parameterCount } from '@/lib/federation'
+import { PHASES, type Phase } from '@/lib/phases'
 import { cn } from '@/lib/utils'
 
 const SPEEDS = [0.5, 1, 1.5, 2, 3] as const
+
+/**
+ * The payload line shown for a phase.
+ *
+ * Static for four of the five phases, but Send states a number the dataset
+ * decides — 15 floats on iris, 31 on breast_cancer, 650 on digits — so it is
+ * computed here from metadata rather than printed from a constant.
+ */
+function payloadFor(phase: Phase, floatsPerNode: number): string {
+  return phase.id === 'send'
+    ? `${floatsPerNode} floats per node`
+    : phase.payload
+}
 
 export function TrainingTab({
   rounds,
@@ -35,6 +50,9 @@ export function TrainingTab({
   const replay = useReplay()
   const latest = rounds[rounds.length - 1] ?? null
   const blocks = rounds.filter((r) => r.onChain).length
+  const meta = useDatasetMeta()
+  const localRows = organisationRows(meta)
+  const floatsPerNode = parameterCount(meta)
 
   return (
     <div className="grid min-h-0 flex-1 grid-cols-[1fr_320px] grid-rows-[1fr_auto]">
@@ -54,7 +72,7 @@ export function TrainingTab({
                   replay.phase === 'distribute' ? 'verified' : 'accent'
                 }
               >
-                {PHASES[replay.cursor]?.payload}
+                {payloadFor(PHASES[replay.cursor]!, floatsPerNode)}
               </Token>
             ) : null
           }
@@ -64,7 +82,8 @@ export function TrainingTab({
           <FederationCanvas
             phase={replay.phase}
             accuracy={latest?.accuracy ?? null}
-            blocks={blocks}
+            rounds={rounds}
+            rows={localRows}
             className="size-full"
           />
 
@@ -104,7 +123,7 @@ export function TrainingTab({
                     {phase.step}. {phase.label}
                   </span>
                   <span className="text-xs font-normal">
-                    {phase.payload}
+                    {payloadFor(phase, floatsPerNode)}
                   </span>
                 </TabsTrigger>
               ))}
