@@ -93,7 +93,7 @@ class VerifyHandler(BaseHTTPRequestHandler):
             return
 
         try:
-            weights = [np.array(w) for w in weights_raw]
+            weights = [np.array(w, dtype=np.float64) for w in weights_raw]
             logger  = _get_logger()          # shared singleton, not a new instance
             match   = logger.verify_round(round_idx, weights)
             self._json({'match': match}, 200)
