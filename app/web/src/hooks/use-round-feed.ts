@@ -64,6 +64,13 @@ export function useRoundFeed(): RoundFeed {
         })
         if (cancelled) return
 
+        if (response.status === 404) {
+          setUsingMock(false)
+          setStatus('empty')
+          setLastUpdated(new Date())
+          return
+        }
+
         if (!response.ok) throw new Error(`HTTP ${response.status}`)
 
         const raw: unknown = await response.json()

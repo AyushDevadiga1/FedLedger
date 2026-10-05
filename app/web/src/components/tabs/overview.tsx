@@ -156,8 +156,7 @@ export function OverviewTab({
       try {
         const raw: unknown = JSON.parse(ev.target?.result as string)
         if (onLoadSnapshot) {
-          const { parseRounds: pr } = await import('@/lib/ledger')
-          onLoadSnapshot(pr(raw))
+          onLoadSnapshot(parseRounds(raw))
         }
         setSnapshotLoaded(true)
       } catch {
@@ -253,12 +252,12 @@ export function OverviewTab({
             }
           />
           <StatTile
-            label="best train accuracy"
+            label="best test accuracy"
             value={stats.best === null ? '—' : `${stats.best.toFixed(1)}%`}
             tone="accent"
             hint={
               stats.meanDelta === null
-                ? 'local train set'
+                ? 'mean of held-out scores'
                 : `${stats.meanDelta >= 0 ? '+' : ''}${stats.meanDelta.toFixed(1)}% across run`
             }
           />
@@ -297,7 +296,7 @@ export function OverviewTab({
             <p className="text-sm text-muted-foreground">
               <span className="font-mono">round_results.json</span> carries
               three fields per round: the round number, the mean local
-              training accuracy, and the transaction hash. Anything beyond
+              held-out accuracy, and the transaction hash. Anything beyond
               that is read from the contract itself, and anything the contract
               never stored is marked as missing rather than filled in.
             </p>
@@ -311,8 +310,8 @@ export function OverviewTab({
                   why: 'Verification needs the global weights and nothing exposes them, so they must be dropped or pasted into the Verify tab.',
                 },
                 {
-                  missing: 'held-out accuracy',
-                  why: `The ${stats.latest?.toFixed(1) ?? '—'}% figure is mean accuracy on each node's own training data. It is not a generalisation score and should not be read as one.`,
+                  missing: 'score on a common test set',
+                  why: `The ${stats.latest?.toFixed(1) ?? '—'}% figure is the mean of each node's accuracy on its own 20% held-out split of its local data. Each node holds different rows, so the scores are averaged but never measured against one shared test set — it is not directly comparable to a single-model generalisation score.`,
                 },
                 {
                   missing: 'per-organisation accuracy',

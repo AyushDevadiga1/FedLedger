@@ -15,7 +15,7 @@ export type RawRound = [round: number, accuracy: number, txHash: string]
 export interface LedgerRound {
   /** Server round number as written by the backend. */
   round: number
-  /** Mean of the three nodes' accuracy on their own local TRAIN set. */
+  /** Mean of the three nodes' accuracy on their own local held-out split. */
   accuracy: number
   /** Transaction hash, or '0x0' when the round never made it on-chain. */
   txHash: string
@@ -129,15 +129,18 @@ export type VerifyOutcome =
   | { status: 'error'; chainIndex: number; message: string }
 
 /**
- * POST /verify?round=<chainIndex> with {weights:[[coef,intercept],...]}.
+ * POST /verify?round=<chainIndex> with {weights:[coef_matrix, intercept_vector]}.
  *
  * Note the weights must serialise as floats. `[0.0412, -0.1188]` is fine
  * but `0` instead of `0.0` changes the JSON text, which changes the
  * SHA-256, which silently turns a genuine match into a mismatch.
+ *
+ * The server re-serialises with `json.dumps([x.tolist() ...])`, so only the
+ * numeric values and nesting have to survive — client-side formatting does not.
  */
 export async function verifyRound(
   chainIndex: number,
-  weights: number[][],
+  weights: WeightPayload,
   signal?: AbortSignal,
 ): Promise<VerifyOutcome> {
   let response: Response
@@ -180,11 +183,26 @@ export async function verifyRound(
 
 /* ── polling ─────────────────────────────────────────────────────── */
 
+/** Total scalars in a round's aggregated weights (3x4 coef + 3 intercepts). */
+export const WEIGHT_FLOATS = 15
+
 /**
- * Parse a pasted weights blob, rejecting the shapes that silently break
- * hashing rather than letting them reach the verifier.
+ * Expected weight shape: [coef_matrix, intercept_vector].
+ *
+ * This mirrors `compute_weight_hash` in fl_server/fedavg.py, which does
+ * `[x.tolist() for x in global_weights]` over the list the FedAvg step
+ * returns. So the payload is NOT a list of [coef, intercept] pairs — it is
+ * a 2-element array whose first element is the whole coefficient matrix
+ * and whose second is the intercept vector. Getting this wrong still
+ * hashes *something*, so the mismatch surfaces as bogus "tampering".
  */
-export function parseWeights(text: string): number[][] | { error: string } {
+export type WeightPayload = [number[][], number[]]
+
+function isFlatVector(v: unknown): v is number[] {
+  return Array.isArray(v) && v.every((n) => typeof n === 'number' && Number.isFinite(n))
+}
+
+export function parseWeights(text: string): WeightPayload | { error: string } {
   let parsed: unknown
   try {
     parsed = JSON.parse(text)
@@ -192,17 +210,81 @@ export function parseWeights(text: string): number[][] | { error: string } {
     return { error: 'not valid JSON' }
   }
   if (!Array.isArray(parsed) || parsed.length === 0) {
-    return { error: 'expected a non-empty array of [coef, intercept] pairs' }
+    return { error: 'expected [coef_matrix, intercept_vector]' }
   }
-  for (const row of parsed) {
-    if (!Array.isArray(row) || row.length !== 2) {
-      return { error: 'each row must be exactly [coef, intercept]' }
-    }
-    if (!row.every((n) => typeof n === 'number' && Number.isFinite(n))) {
-      return { error: 'weights must be finite numbers' }
+  if (parsed.length !== 2) {
+    return {
+      error: `expected exactly 2 items (coef matrix, intercept vector), got ${parsed.length}`,
     }
   }
-  return parsed as number[][]
+
+  const [coef, intercept] = parsed as unknown[]
+
+  // coef: rows of equal length, all finite, and consistent with intercept.
+  if (!Array.isArray(coef) || coef.length === 0) {
+    return { error: 'coef_matrix must be a non-empty array of rows' }
+  }
+  if (!coef.every(isFlatVector)) {
+    return { error: 'coef_matrix must be rows of finite numbers' }
+  }
+  const width = (coef as number[][])[0].length
+  if (!coef.every((row) => (row as number[]).length === width)) {
+    return { error: 'every coef row must have the same number of columns' }
+  }
+
+  if (!isFlatVector(intercept) || intercept.length === 0) {
+    return { error: 'intercept_vector must be a non-empty array of finite numbers' }
+  }
+  if (intercept.length !== coef.length) {
+    return {
+      error: `intercept length ${intercept.length} must match coef rows ${coef.length}`,
+    }
+  }
+
+  return [coef as number[][], intercept as number[]]
 }
 
 export const RESULTS_URL = '/round_results.json'
+
+/* ── dataset metadata ─────────────────────────────────────────────── */
+
+/**
+ * Shape of data/dataset_meta.json, written by data/generate_partitions.py.
+ * The row count lives here rather than being hardcoded so the UI stays
+ * correct when the launcher runs a different dataset.
+ */
+export interface DatasetMeta {
+  name: string
+  description: string
+  total_samples: number
+  num_features: number
+  num_classes: number
+}
+
+const DATASET_META_FALLBACK: DatasetMeta = {
+  name: 'iris',
+  description: '150 samples, 4 features, 3 classes',
+  total_samples: 150,
+  num_features: 4,
+  num_classes: 3,
+}
+
+export const DATASET_META_URL = '/dataset_meta.json'
+
+export async function fetchDatasetMeta(
+  signal?: AbortSignal,
+): Promise<DatasetMeta> {
+  try {
+    const res = await fetch(DATASET_META_URL, { signal })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const meta = (await res.json()) as Partial<DatasetMeta>
+    if (typeof meta.total_samples !== 'number' || typeof meta.name !== 'string') {
+      throw new Error('unexpected shape')
+    }
+    return { ...DATASET_META_FALLBACK, ...meta }
+  } catch {
+    // The server already serves a matching default when the file is absent,
+    // so reaching here means the dashboard is offline rather than unconfigured.
+    return DATASET_META_FALLBACK
+  }
+}

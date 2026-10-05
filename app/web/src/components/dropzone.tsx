@@ -105,7 +105,7 @@ export function WeightsDropzone({
           ) : null}
         </span>
         <span className="font-mono text-xs text-subtle">
-          JSON array of [coef, intercept] pairs
+          JSON array: [coef_matrix, intercept_vector]
         </span>
       </div>
     </div>
@@ -115,16 +115,20 @@ export function WeightsDropzone({
 /**
  * Alter one coefficient so the mismatch path can be shown without hand-editing
  * a JSON blob on stage. Returns null when there is nothing numeric to change.
+ *
+ * Nudges a single cell of the coefficient matrix — the same thing a party
+ * substituting a different local model would produce.
  */
 export function tamperWeights(text: string): string | null {
   const parsed = parseWeights(text)
   if (!Array.isArray(parsed)) return null
 
-  const mutated = parsed.map(([coef, intercept]) => [
-    // nudge by a magnitude a real substitution would plausibly have
-    Number((coef + 0.0001).toFixed(6)),
-    intercept,
-  ]) as number[][]
+  const [coef, intercept] = parsed
+  if (coef.length === 0 || coef[0].length === 0) return null
 
-  return JSON.stringify(mutated)
+  const mutated = coef.map((row) => [...row])
+  // nudge by a magnitude a real substitution would plausibly have
+  mutated[0][0] = Number((mutated[0][0] + 0.0001).toFixed(6))
+
+  return JSON.stringify([mutated, intercept])
 }

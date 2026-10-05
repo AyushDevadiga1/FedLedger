@@ -72,15 +72,15 @@ function MlState({ round }: { round: LedgerRound }) {
       <div className="flex items-center gap-5">
         <AccuracyRing value={accuracy} />
         <div className="flex flex-col gap-1">
-          <Eyebrow>Training accuracy</Eyebrow>
+          <Eyebrow>Held-out accuracy</Eyebrow>
           <p className="text-sm text-muted-foreground">
             Mean of the three organisations&apos; accuracy, each scored on its
-            own local training shard.
+            own local 20% held-out split.
           </p>
         </div>
       </div>
 
-      {round.round !== round.chainIndex ? (
+      {round.chainIndex !== null && round.round !== round.chainIndex + 1 ? (
         <p className="flex items-start gap-2 border-l-2 border-border-strong pl-3 text-xs text-subtle">
           <TriangleAlert className="mt-0.5 size-3 shrink-0 text-subtle" aria-hidden />
           <span>

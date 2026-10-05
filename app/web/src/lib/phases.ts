@@ -25,7 +25,7 @@ export const PHASES: Phase[] = [
     label: 'Train',
     payload: 'nothing leaves',
     detail:
-      'OrgA, OrgB and OrgC each fit a logistic regression on their own 40-row shard. The rows stay on the node.',
+      'OrgA, OrgB and OrgC each fit a logistic regression on their own 50-row shard. The rows stay on the node.',
   },
   {
     id: 'send',
@@ -71,7 +71,6 @@ export type FlowDirection = 'none' | 'up' | 'down'
 export function directionFor(phase: PhaseId | null): FlowDirection {
   switch (phase) {
     case 'send':
-    case 'aggregate':
       return 'up'
     case 'distribute':
       return 'down'

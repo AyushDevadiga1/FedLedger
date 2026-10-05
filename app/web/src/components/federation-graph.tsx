@@ -89,7 +89,16 @@ function OrgNode({ data }: NodeProps<Node<OrgData, 'org'>>) {
           STATE_STROKE[accent],
         )}
       >
-        <Handle type="target" position={Position.Top} />
+{/* Both org handles sit on the bottom edge because the server is
+            *below* them. They are split left/right and given explicit ids so
+            the outbound and inbound links take separate paths instead of
+            drawing over each other. */}
+        <Handle
+          id="out"
+          type="source"
+          position={Position.Bottom}
+          style={{ left: '32%' }}
+        />
         <div className="flex items-start justify-between gap-2">
           <span className="font-mono text-sm font-medium text-foreground">
             {name}
@@ -120,7 +129,12 @@ function OrgNode({ data }: NodeProps<Node<OrgData, 'org'>>) {
             {accent === 'verified' ? 'model updated' : '0 rows sent'}
           </span>
         </div>
-        <Handle type="source" position={Position.Bottom} />
+        <Handle
+          id="in"
+          type="target"
+          position={Position.Bottom}
+          style={{ left: '68%' }}
+        />
       </div>
     </div>
   )
@@ -135,7 +149,23 @@ function ServerNode({ data }: NodeProps<Node<ServerData, 'server'>>) {
         state === 'working' ? 'border-primary' : 'border-border',
       )}
     >
-      <Handle type="target" position={Position.Top} />
+      {/* 'in' and 'dist' both live on the top edge because the organisations
+          sit above the server; 'chain' leaves downward to the ledger. Explicit
+          ids are required — two handles sharing a null id cannot be told apart
+          by the edge resolver, which is what made the inbound link attach to
+          the wrong one. */}
+      <Handle
+        id="in"
+        type="target"
+        position={Position.Top}
+        style={{ left: '32%' }}
+      />
+      <Handle
+        id="dist"
+        type="source"
+        position={Position.Top}
+        style={{ left: '68%' }}
+      />
       <div className="flex items-baseline justify-between gap-2">
         <span className="font-mono text-sm font-medium text-foreground">
           FL Server
@@ -155,7 +185,7 @@ function ServerNode({ data }: NodeProps<Node<ServerData, 'server'>>) {
           mean local train acc
         </span>
       </div>
-      <Handle type="source" position={Position.Bottom} />
+      <Handle id="chain" type="source" position={Position.Bottom} />
     </div>
   )
 }
@@ -201,12 +231,10 @@ function ChainNode({ data }: NodeProps<Node<ChainData, 'chain'>>) {
       <div className="mt-1.5 font-mono text-xs text-subtle">
         append-only · no update or delete
       </div>
-      <Handle type="target" position={Position.Top} />
+      <Handle id="in" type="target" position={Position.Top} />
     </div>
   )
 }
-
-const NODE_TYPES = { org: OrgNode, server: ServerNode, chain: ChainNode }
 
 /* ── payload edge ──────────────────────────────────────────────────── */
 
@@ -404,10 +432,13 @@ export function useFederationGraph({
     const list: Edge[] = []
 
     for (const org of ORGS) {
+      // weights travelling up to the aggregator
       list.push({
         id: `${org.id}-up`,
         source: org.id,
+        sourceHandle: 'out',
         target: 'server',
+        targetHandle: 'in',
         type: 'payload',
         data: {
           label: '15 floats · weights only',
@@ -417,10 +448,13 @@ export function useFederationGraph({
           tone: 'accent',
         } satisfies PayloadData,
       })
+      // global model travelling back down to the same organisation
       list.push({
         id: `${org.id}-down`,
         source: 'server',
+        sourceHandle: 'dist',
         target: org.id,
+        targetHandle: 'in',
         type: 'payload',
         data: {
           label: 'global model',
@@ -435,7 +469,9 @@ export function useFederationGraph({
     list.push({
       id: 'server-chain',
       source: 'server',
+      sourceHandle: 'chain',
       target: 'chain',
+      targetHandle: 'in',
       type: 'payload',
       data: {
         label: 'logRound() · hash',

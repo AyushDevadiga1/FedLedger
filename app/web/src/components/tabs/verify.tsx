@@ -151,8 +151,8 @@ export function VerifyTab({
                 <p className="text-xs text-subtle">
                   loaded <span className="font-mono text-muted-foreground">{droppedName}</span>
                   {' · '}
-                  {parsed && Array.isArray(parsed)
-                    ? `${parsed.length} coefficient${parsed.length === 1 ? '' : 's'}`
+                  {parsed && !('error' in parsed)
+                    ? `coef matrix ${parsed[0].length}×${parsed[0][0]?.length ?? 0} + ${parsed[1].length} intercepts`
                     : ''}
                 </p>
               ) : (
