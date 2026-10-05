@@ -31,12 +31,29 @@ NODE_CONFIG = {
     3: {"org": "OrgC", "data_dir": "data/node3"},
 }
 
-# Local training budget. FedAvg assumes each node runs a *converged* local
-# solve before averaging; `max_iter=1` gave a single L-BFGS step, so rounds
-# composited into a random walk and accuracy drifted down instead of
-# converging. 100 is sklearn's own default and converges iris/wine/
-# breast_cancer within a handful of iterations.
-LOCAL_MAX_ITER = 100
+# Default local training budget, in L-BFGS iterations.
+#
+# FedAvg assumes each node runs a *converged* local solve before averaging, so
+# this cannot be too low: at max_iter=1 a node takes a single step, rounds
+# composited into a random walk, and accuracy drifted down instead of settling.
+#
+# It also cannot be too high, for a different reason. Measured over 8 rounds on
+# iris (mean of the three nodes' held-out scores):
+#
+#     it=  5   62.4 87.6 93.9 93.9 97.0 97.0 97.0 97.0   <- rises, then holds
+#     it= 10   97.0 97.0 97.0 97.0 97.0 97.0 100. 100.  <- already converged
+#     it=100   97.0 97.0 97.0 97.0 97.0 97.0 97.0 97.0   <- flat from round 1
+#
+# 5 is the point where the curve still shows the learning happening and the last
+# round is also the best one, i.e. it converges rather than oscillating. Higher
+# values finish before the first round is reported; 1 and 2 oscillate instead of
+# converging (it=2 ends at 62%).
+#
+# Note this is dataset-dependent, and not usefully so: wine and breast_cancer
+# sit flat at ~97% at *every* budget including 5, because they converge inside
+# the first local fit. Visible progression needs per-node data volume as much as
+# it needs the iteration count.
+LOCAL_MAX_ITER = 5
 
 
 def coef_rows(n_classes: int) -> int:
@@ -82,7 +99,7 @@ class FedLedgerClient(fl.client.NumPyClient):
     """
 
     def __init__(self, node_id: str, X_train, y_train, X_test, y_test,
-                 num_classes: int | None = None):
+                 num_classes: int | None = None, max_iter: int | None = None):
         """
         Initialise client with private data.
         node_id: string identifier e.g. "OrgA", "OrgB", "OrgC"
@@ -91,6 +108,7 @@ class FedLedgerClient(fl.client.NumPyClient):
         num_classes: total class count for the whole dataset. Pass this when
                      the local shard may not contain every class; see
                      init_parameters for why guessing it locally is unsafe.
+        max_iter: local L-BFGS budget. Defaults to LOCAL_MAX_ITER.
         """
         self.node_id = node_id
 
@@ -101,9 +119,12 @@ class FedLedgerClient(fl.client.NumPyClient):
 
         self.num_classes = num_classes or load_global_num_classes()
         self.local_classes = np.unique(y_train)
+        # Overridable because the right budget depends on the dataset: see
+        # LOCAL_MAX_ITER for the measurements behind the default.
+        self.max_iter = max_iter or LOCAL_MAX_ITER
 
         self.model = LogisticRegression(
-            penalty="l2", max_iter=LOCAL_MAX_ITER, warm_start=True
+            penalty="l2", max_iter=self.max_iter, warm_start=True
         )
 
         self.init_parameters()
@@ -270,6 +291,15 @@ def main():
         "--node", type=int, choices=[1, 2, 3], required=True,
         help="Node number: 1 = OrgA, 2 = OrgB, 3 = OrgC",
     )
+    parser.add_argument(
+        "--max-iter", type=int, default=None,
+        help=(
+            f"Local L-BFGS iterations (default {LOCAL_MAX_ITER}). Lower values "
+            f"show more visible per-round movement; 1-2 oscillate instead of "
+            f"converging, and values above ~10 converge before round 1 is "
+            f"reported."
+        ),
+    )
     args = parser.parse_args()
 
     config = NODE_CONFIG[args.node]
@@ -304,7 +334,8 @@ def main():
         y_train=y_train,
         X_test=X_test,
         y_test=y_test,
-        num_classes=global_classes
+        num_classes=global_classes,
+        max_iter=args.max_iter
     )
 
     # 3. Modern Flower orchestration interface execution block

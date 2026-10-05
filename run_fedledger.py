@@ -169,6 +169,17 @@ def main():
             'Omit to keep whatever is already in data/node*/'
         ),
     )
+    parser.add_argument(
+        '--max-iter', type=int, default=None,
+        help=(
+            'Local L-BFGS iterations per node. The default (5) is where the '
+            'accuracy curve still shows the learning happening and still '
+            'converges. 1-2 oscillate rather than converge; 10+ converge '
+            'before round 1 is reported. Note that wine and breast_cancer sit '
+            'flat at ~97% at any budget, so pick --dataset digits or iris if '
+            'you want visible per-round movement.'
+        ),
+    )
     args = parser.parse_args()
 
     procs = []
@@ -256,8 +267,10 @@ def main():
     # 6-8. FL Nodes
     print(f'[6/8] Starting 3 FL nodes (OrgA, OrgB, OrgC), {args.rounds} rounds…')
     for node_id in [1, 2, 3]:
-        procs.append(spawn([PY, str(ROOT / 'fl_nodes' / 'node.py'),
-                            '--node', str(node_id)], cwd=ROOT, env=py_env,
+        node_cmd = [PY, str(ROOT / 'fl_nodes' / 'node.py'), '--node', str(node_id)]
+        if args.max_iter is not None:
+            node_cmd += ['--max-iter', str(args.max_iter)]
+        procs.append(spawn(node_cmd, cwd=ROOT, env=py_env,
                             name=f'node{node_id}'))
         time.sleep(0.5)
 
