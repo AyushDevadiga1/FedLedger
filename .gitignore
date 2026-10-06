@@ -26,6 +26,8 @@ app/deprecated
 
 # Local tooling
 .qodo/
+.freebuff
+.pytest_cache
 
 # Logs — run_fedledger.py writes logs/*.log, one per child process
 /logs
