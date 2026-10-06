@@ -8,31 +8,38 @@ import { defineConfig, type Plugin } from 'vite'
 const APP_DIR = fileURLToPath(new URL('..', import.meta.url))
 
 /**
- * round_results.json is written by fl_server/server.py into app/, which is
- * one level above the Vite root. Rather than widen publicDir (that would
- * copy verify_server.py and the legacy index.html into dist/), serve just
- * this one file in dev. In production the built app reads it from whatever
- * origin the Python launcher serves.
+ * round_results.json and global_weights.json are written by
+ * fl_server/server.py into app/, which is one level above the Vite root.
+ * Rather than widen publicDir (that would copy verify_server.py and the
+ * legacy index.html into dist/), serve just these files in dev. In
+ * production the built app reads them from whatever origin the Python
+ * launcher serves.
  */
-function serveRoundResults(): Plugin {
+function serveAppJson(): Plugin {
+  const files: Record<string, string> = {
+    '/round_results.json': 'round_results.json',
+    '/global_weights.json': 'global_weights.json',
+  }
   return {
-    name: 'fedledger:serve-round-results',
+    name: 'fedledger:serve-app-json',
     configureServer(server) {
-      server.middlewares.use('/round_results.json', (_req, res) => {
-        readFile(`${APP_DIR}/round_results.json`, 'utf8')
-          .then((body) => {
-            res.setHeader('Content-Type', 'application/json')
-            res.setHeader('Cache-Control', 'no-store')
-            res.end(body)
-          })
-          .catch(() => {
-            // No file yet is a normal state, not a server fault — the
-            // dashboard treats a non-ok response as "not reachable yet".
-            res.statusCode = 404
-            res.setHeader('Content-Type', 'application/json')
-            res.end('{"error":"round_results.json not written yet"}')
-          })
-      })
+      for (const [route, file] of Object.entries(files)) {
+        server.middlewares.use(route, (_req, res) => {
+          readFile(`${APP_DIR}/${file}`, 'utf8')
+            .then((body) => {
+              res.setHeader('Content-Type', 'application/json')
+              res.setHeader('Cache-Control', 'no-store')
+              res.end(body)
+            })
+            .catch(() => {
+              // No file yet is a normal state, not a server fault — the
+              // dashboard treats a non-ok response as "not reachable yet".
+              res.statusCode = 404
+              res.setHeader('Content-Type', 'application/json')
+              res.end(`{"error":"${file} not written yet"}`)
+            })
+        })
+      }
     },
   }
 }
@@ -133,7 +140,7 @@ function serveChainRead(): Plugin {
 }
 
 export default defineConfig({
-  plugins: [react(), tailwindcss(), serveRoundResults(), serveChainRead()],
+  plugins: [react(), tailwindcss(), serveAppJson(), serveChainRead()],
   resolve: {
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url)),

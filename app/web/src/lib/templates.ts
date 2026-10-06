@@ -13,7 +13,9 @@
  * Compare hashes will report a mismatch. That is the correct and honest
  * outcome: it demonstrates that verification is real, and the "Alter one
  * coefficient" button next to it produces the same verdict for a documented
- * reason. A file that could magically match would be a lie about the ledger.
+ * reason. A demo file that could magically match would be a lie about the
+ * ledger — the file that CAN match is the run's own saved weights, loaded
+ * through the live-weights button, never one of these templates.
  *
  * The snapshot template is different — it is only read by the dashboard, never
  * hashed, so it loads and displays correctly as-is.
@@ -80,6 +82,25 @@ export function downloadTemplate(url: string, name: string): void {
   a.href = url
   a.download = name
   a.click()
+}
+
+/**
+ * Download arbitrary text as a file — for weights the run saved, which have
+ * no URL because they live inside global_weights.json rather than on disk
+ * as their own file. Blob + object URL, revoked after the click so nothing
+ * leaks across repeated downloads.
+ */
+export function downloadTextFile(name: string, text: string): void {
+  const blob = new Blob([text], { type: 'application/json' })
+  const url = URL.createObjectURL(blob)
+  try {
+    const a = document.createElement('a')
+    a.href = url
+    a.download = name
+    a.click()
+  } finally {
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+  }
 }
 
 /**

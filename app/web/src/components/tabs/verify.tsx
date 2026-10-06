@@ -27,6 +27,7 @@ import { useChainHead } from '@/hooks/use-chain-head'
 import {
   parseChainIndex,
   parseWeights,
+  fetchGlobalWeights,
   verifyRound,
   type LedgerRound,
   type VerifyOutcome,
@@ -34,6 +35,7 @@ import {
 import { cn } from '@/lib/utils'
 import {
   downloadTemplate,
+  downloadTextFile,
   fetchTemplate,
   weightsFromTemplate,
   WEIGHT_TEMPLATES,
@@ -93,6 +95,7 @@ export function VerifyTab({
   const [droppedName, setDroppedName] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [outcome, setOutcome] = useState<VerifyOutcome | null>(null)
+  const [liveBusy, setLiveBusy] = useState(false)
 
   // ── in-flight control ──────────────────────────────────────────────
   // A stale verdict is worse than no verdict on a page whose job is to be
@@ -179,6 +182,88 @@ export function VerifyTab({
 
   const submitDisabled =
     busy || parseError !== null || !weightsOk || parsedIndex === null || indexError !== null
+
+  /**
+   * The round whose weights to fetch from the run: the CONTRACT's round
+   * number for this index first, the local feed's claim second. Either is
+   * good enough to key global_weights.json — and if they disagree, the
+   * comparison that follows is still judged against the chain, so a wrong
+   * guess here can only produce an honest mismatch, never a false match.
+   */
+  const roundForLive = onChain?.roundNumber ?? localClaim?.round ?? null
+
+  /**
+   * Fetch the exact weights this run saved for the selected round.
+   *
+   * Shared by the load and download buttons so the two files a user can
+   * hold — the one in the box and the one on disk — are byte-identical in
+   * value and both verify with a match. Failures report through the outcome
+   * panel with the same wording whichever button was pressed.
+   */
+  const getLiveText = useCallback(async (): Promise<{
+    round: number
+    text: string
+  } | null> => {
+    if (roundForLive === null) return null
+    const file = await fetchGlobalWeights()
+    const entry = file?.[String(roundForLive)] ?? null
+    if (!entry) {
+      setOutcome({
+        status: 'error',
+        chainIndex: parsedIndex ?? 0,
+        code: 'not_found',
+        message:
+          `This run saved no weights for round ${roundForLive} — it likely ` +
+          `started before weight logging existed. Re-run to generate them.`,
+      })
+      return null
+    }
+    // Compact here; the download path pretty-prints. Either parses to the
+    // same numbers, and only the values matter to the verifier.
+    return { round: roundForLive, text: JSON.stringify(entry) }
+  }, [roundForLive, parsedIndex])
+
+  /**
+   * Load the exact weights this run saved for the selected round.
+   *
+   * This is the path to a MATCH: the server persisted the same .tolist()
+   * arrays compute_weight_hash hashed, so comparing them must agree. Demo
+   * files and hand-pasted weights can only mismatch (or match by miracle);
+   * this button is what a viva actually clicks.
+   */
+  const loadLive = useCallback(async () => {
+    setLiveBusy(true)
+    try {
+      const live = await getLiveText()
+      if (!live) return
+      // Stringified, not pretty-printed: parseWeights re-validates it below,
+      // which is the strict gate regardless of where the text came from.
+      setWeights(live.text)
+      setDroppedName(`live weights · round ${live.round}`)
+      setOutcome(null)
+    } finally {
+      setLiveBusy(false)
+    }
+  }, [getLiveText])
+
+  /**
+   * Download the same weights as a file — the "actual" half of the demo
+   * pair. Dropping it back into the box (or the dropzone) and comparing
+   * must report a match, next to the demo file's honest mismatch.
+   */
+  const downloadLive = useCallback(async () => {
+    setLiveBusy(true)
+    try {
+      const live = await getLiveText()
+      if (!live) return
+      downloadTextFile(
+        `fedledger_round${live.round}_weights.json`,
+        JSON.stringify(JSON.parse(live.text) as unknown, null, 2),
+      )
+    } finally {
+      setLiveBusy(false)
+    }
+  }, [getLiveText])
 
   return (
     <div className="grid min-h-0 flex-1 grid-cols-2">
@@ -355,7 +440,47 @@ export function VerifyTab({
 
               <div className="flex flex-wrap items-center gap-2 border border-border bg-muted/40 px-3 py-2">
                 <FileCode className="size-3.5 shrink-0 text-subtle" aria-hidden />
-                <span className="text-2xs text-muted-foreground">Demo files</span>
+                {feedIsReal !== false ? (
+                  <span className="flex items-center gap-1">
+                    <span className="text-2xs text-muted-foreground">
+                      From this run — will match
+                    </span>
+                    <button
+                      type="button"
+                      onClick={loadLive}
+                      disabled={roundForLive === null || liveBusy}
+                      className="rounded-sm border border-verified/50 bg-verified/10 px-1.5 py-0.5 font-mono text-2xs text-verified transition-colors hover:border-verified hover:bg-verified/20 disabled:cursor-not-allowed disabled:opacity-50"
+                      title={
+                        roundForLive === null
+                          ? 'Pick a chain index first'
+                          : `Load the exact weights this run saved for round ${roundForLive} — comparing them must report a match`
+                      }
+                    >
+                      {liveBusy
+                        ? 'loading…'
+                        : roundForLive === null
+                          ? 'load live weights'
+                          : `load live weights · round ${roundForLive}`}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={downloadLive}
+                      disabled={roundForLive === null || liveBusy}
+                      className="text-subtle transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                      title={
+                        roundForLive === null
+                          ? 'Pick a chain index first'
+                          : `Download round ${roundForLive}'s weights as fedledger_round${roundForLive}_weights.json — the actual file`
+                      }
+                      aria-label="Download live weights as a file"
+                    >
+                      <Download className="size-3" />
+                    </button>
+                  </span>
+                ) : null}
+                <span className="text-2xs text-muted-foreground">
+                  Demo files — invented, will mismatch
+                </span>
                 {WEIGHT_TEMPLATES.map((t) => (
                   <span key={t.url} className="flex items-center gap-1">
                     <button
@@ -402,7 +527,8 @@ export function VerifyTab({
                   </span>
                 ))}
                 <span className="text-2xs text-subtle">
-                  — shows the two shapes a coef matrix takes
+                  — the pair shows both verdicts: the run's own file
+                  matches, the invented demo files mismatch
                 </span>
               </div>
 
@@ -435,21 +561,25 @@ export function VerifyTab({
                 </p>
               ) : (
                 <p className="text-xs text-subtle">
-                  Recompute this locally with FedAvg over the three node
-                  updates. Nothing in the backend exposes the stored weights
-                  yet, so it has to be dropped or pasted in.
+                  Load the live weights this run saved for the selected
+                  round, drop a weights file, or paste JSON — or recompute
+                  FedAvg over the three node updates by hand.
                 </p>
               )}
             </div>
 
             <Alert className="border-primary/40 bg-primary/5 text-foreground [&>svg]:text-primary">
               <AlertTriangle />
-              <AlertTitle>Demo files will not match, and that is correct</AlertTitle>
+              <AlertTitle>Two files, two verdicts — that is the demo</AlertTitle>
               <AlertDescription>
                 The chain stores a SHA-256 of the <em>real</em> aggregated
-                weights. The demo files above are plausible but invented, so
-                Compare hashes reports a mismatch — which is the honest result
-                and shows verification is genuinely running.
+                weights, so which file you compare decides the verdict before
+                you click: the run's own weights must report a{' '}
+                <em>match</em>, and the plausible-but-invented demo files
+                must report a <em>mismatch</em>. Either verdict going the
+                other way means something is genuinely wrong — and the
+                mismatch side is the proof that verification really runs
+                instead of always saying yes.
                 <span className="mt-2 block text-muted-foreground">
                   Your formatting cannot cause a false mismatch: the verifier
                   re-serialises the numbers itself, so{' '}

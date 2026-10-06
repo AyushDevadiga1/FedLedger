@@ -29,6 +29,14 @@ from sklearn.linear_model import LogisticRegression
 # Path to JSON file the dashboard polls every 2 seconds
 _RESULTS_PATH = os.path.join(os.path.dirname(__file__), '..', 'app', 'round_results.json')
 
+# Per-round aggregated weights, keyed by round number as strings.
+# The Verify tab loads these so a comparison can report a genuine MATCH:
+# without them the only loadable weights are the invented demo templates,
+# which can never hash to an on-chain value. Global weights are broadcast
+# to every node each round anyway, so persisting them reveals nothing the
+# protocol does not already share — raw rows stay on the nodes.
+_WEIGHTS_PATH = os.path.join(os.path.dirname(__file__), '..', 'app', 'global_weights.json')
+
 
 # ── Global state ──────────────────────────────────────────────────────
 round_results = []   # store (round, accuracy, tx_hash) for dashboard
@@ -59,6 +67,12 @@ class FedLedgerStrategy(fl.server.strategy.Strategy):
         # Initialise here — not lazily in aggregate_fit — so any code that
         # reads self.round_results always gets a list, never an AttributeError.
         self.round_results: list = []
+        # Aggregated weights per round, as plain lists keyed by round number.
+        # Written to global_weights.json alongside round_results.json so the
+        # Verify tab can load the exact values the chain hashed. Rebuilt from
+        # scratch each round from this dict, so a fresh run starts empty —
+        # same lifecycle as round_results.
+        self.global_weights_log: dict = {}
         # Rounds whose blockchain log_round() call raised. Surfaced so a
         # silent "0x0" tx hash can be traced back to a cause.
         self.blockchain_failures: list = []
@@ -272,6 +286,20 @@ class FedLedgerStrategy(fl.server.strategy.Strategy):
                 json.dump(self.round_results, f)
         except Exception as e:
             print(f"[dashboard] Could not write round_results.json: {e}")
+
+        # Persist the exact arrays compute_weight_hash hashed: .tolist() here
+        # is the same call the hasher makes, so a file that round-trips these
+        # numbers verifies with a match. Skipped only when there is nothing
+        # to persist (evaluate without a preceding fit).
+        if self.global_weights is not None:
+            try:
+                self.global_weights_log[str(server_round)] = [
+                    w.tolist() for w in self.global_weights
+                ]
+                with open(_WEIGHTS_PATH, 'w') as f:
+                    json.dump(self.global_weights_log, f)
+            except Exception as e:
+                print(f"[dashboard] Could not write global_weights.json: {e}")
 
         return accuracy, {"accuracy": accuracy}
 

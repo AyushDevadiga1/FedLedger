@@ -433,6 +433,33 @@ export function parseWeights(text: string): WeightPayload | { error: string } {
 
 export const RESULTS_URL = '/round_results.json'
 
+export const GLOBAL_WEIGHTS_URL = '/global_weights.json'
+
+/**
+ * Per-round aggregated weights the FL server persisted to
+ * app/global_weights.json, keyed by round number as strings.
+ *
+ * These are the exact arrays compute_weight_hash hashed — .tolist() output,
+ * written by the same process — so loading one and comparing must report a
+ * match. Entries are validated only as 2-element arrays here; the entry
+ * actually loaded goes through parseWeights, which is the strict gate.
+ * Null when the file is absent (no round completed yet, or the run started
+ * before weight logging existed) or unreadable.
+ */
+export async function fetchGlobalWeights(
+  signal?: AbortSignal,
+): Promise<Record<string, unknown> | null> {
+  try {
+    const res = await fetch(GLOBAL_WEIGHTS_URL, { signal })
+    if (!res.ok) return null
+    const raw: unknown = await res.json()
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+    return raw as Record<string, unknown>
+  } catch {
+    return null
+  }
+}
+
 /* ── dataset metadata ─────────────────────────────────────────────── */
 
 /**

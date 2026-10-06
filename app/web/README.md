@@ -18,6 +18,7 @@ python ../../app/dashboard_server.py
 | Endpoint | Producer | Used for |
 |---|---|---|
 | `GET /round_results.json` | `fl_server/server.py` after each round | round feed, ledger table, accuracy chart |
+| `GET /global_weights.json` | `fl_server/server.py` after each round | per-round aggregates the chain hashed — the Verify tab's "load live weights" button reads the entry for the selected round |
 | `GET /dataset_meta.json` | `data/generate_partitions.py` | dataset stats on the Overview tab |
 | `GET /chain/config` | `blockchain/scripts/deploy.js` | contract address |
 | `POST /chain/rpc` | `app/dashboard_server.py` → Hardhat `:8545` (read-only proxy) | receipts, block numbers, contract reads |

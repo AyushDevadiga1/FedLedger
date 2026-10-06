@@ -148,7 +148,7 @@ FedLedger/
 - **Overview** — what the run demonstrates, dataset stats, and save/load snapshots of the round feed. A loaded snapshot freezes every tab on that data, survives a reload, and a resume-live pill returns to the feed
 - **Federation** — an interactive replay of one round: train → send → aggregate → seal → distribute, with every edge labelled by what actually crosses it. Uploads travel one organisation at a time and land as chips in the server's inbox; the global model returns to all three at once. A speed slider rescales dots and phases together, and Auto / Full / Still controls motion (the OS reduced-motion setting is respected)
 - **Ledger** — every round with its on-chain receipt, plus the accuracy curve
-- **Verify** — paste or drop your locally recomputed FedAvg weights and compare their hash against the one stored on-chain. The comparison always runs against the real chain, and when the feed is mock data or a frozen snapshot the tab says so — that result is not evidence about the run on screen
+- **Verify** — paste or drop your locally recomputed FedAvg weights and compare their hash against the one stored on-chain. The comparison always runs against the real chain, and when the feed is mock data or a frozen snapshot the tab says so — that result is not evidence about the run on screen. For the viva path, load the run's own saved weights for the selected round: that comparison must report a match
 
 The dashboard reads the chain through a read-only RPC proxy (`POST /chain/rpc`), so no write method ever reaches the browser.
 

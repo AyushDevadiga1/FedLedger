@@ -13,6 +13,7 @@ with two dev-only middlewares, and this module is their production equivalent:
   GET  /                    -> app/web/dist/index.html
   GET  /assets/*            -> built JS/CSS bundles
   GET  /round_results.json  -> the file fl_server/server.py writes
+  GET  /global_weights.json -> per-round aggregates the chain hashed
   POST /chain/rpc           -> read-only proxy to the Hardhat node on :8545
   GET  /chain/config        -> contract address from contract_config.json
 
@@ -34,6 +35,7 @@ CHAIN  = ROOT / 'blockchain'
 RPC_URL = 'http://127.0.0.1:8545'
 
 RESULTS_PATH = APP / 'round_results.json'
+WEIGHTS_PATH = APP / 'global_weights.json'
 CONTRACT_CONFIG = CHAIN / 'contract_config.json'
 DATASET_META = ROOT / 'data' / 'dataset_meta.json'
 
@@ -111,6 +113,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
         if path == '/round_results.json':
             return self._serve_results()
+        if path == '/global_weights.json':
+            return self._serve_weights()
         if path == '/chain/config':
             return self._serve_contract_config()
         if path == '/dataset_meta.json':
@@ -132,6 +136,16 @@ class DashboardHandler(BaseHTTPRequestHandler):
             body = RESULTS_PATH.read_bytes()
         except FileNotFoundError:
             return self._json({'error': 'round_results.json not written yet'}, 404)
+        self._send(body, 'application/json')
+
+    def _serve_weights(self):
+        # Same lifecycle as round_results.json: absent until the first round
+        # completes, then the per-round aggregates the chain hashed. Served
+        # raw — the Verify tab validates the shape of the entry it loads.
+        try:
+            body = WEIGHTS_PATH.read_bytes()
+        except FileNotFoundError:
+            return self._json({'error': 'global_weights.json not written yet'}, 404)
         self._send(body, 'application/json')
 
     def _serve_contract_config(self):
