@@ -73,6 +73,10 @@ export function AccuracyChart({ rounds }: { rounds: LedgerRound[] }) {
   const min = Math.min(...values)
   const max = Math.max(...values)
   const pad = Math.max(4, (max - min) * 0.35)
+  // Accuracy is a percentage: padding may lift the tick range but the axis
+  // must never show headroom above 100%.
+  const yMin = Math.max(0, min - pad)
+  const yMax = Math.min(100, max + pad)
   const mean = values.reduce((a, b) => a + b, 0) / values.length
 
   return (
@@ -98,7 +102,7 @@ export function AccuracyChart({ rounds }: { rounds: LedgerRound[] }) {
           tickFormatter={(v: number) => `r${v}`}
         />
         <YAxis
-          domain={[min - pad, max + pad]}
+          domain={[yMin, yMax]}
           width={44}
           tickLine={false}
           axisLine={false}
