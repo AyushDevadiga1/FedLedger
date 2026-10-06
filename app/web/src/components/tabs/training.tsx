@@ -91,7 +91,7 @@ export function TrainingTab({
           }
         />
 
-        <div className="relative min-h-0 flex-1">
+        <div className="relative min-h-0 flex-1 overflow-hidden">
           <FederationCanvas
             phase={replay.phase}
             accuracy={latest?.accuracy ?? null}
@@ -145,7 +145,10 @@ export function TrainingTab({
             </TabsList>
           </Tabs>
 
-          <p className="mt-3 min-h-10 text-sm text-muted-foreground">
+          <p
+            key={replay.cursor}
+            className="fedledger-reveal mt-3 min-h-10 text-sm text-muted-foreground"
+          >
             {replay.phase
               ? PHASES[replay.cursor]?.detail
               : 'Press replay to walk a round end to end. Every edge is labelled with what actually crosses it.'}
