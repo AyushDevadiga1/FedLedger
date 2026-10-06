@@ -8,6 +8,39 @@ Three organisations train a shared ML model using Federated Learning without sha
 
 ---
 
+## How it works — one round
+
+```mermaid
+flowchart LR
+    subgraph Orgs["Organisations — raw rows never leave"]
+        A["OrgA<br/>local rows"]
+        B["OrgB<br/>local rows"]
+        C["OrgC<br/>local rows"]
+    end
+    S["FL Server<br/>FedAvg average"]
+    Chain["FLAuditLog<br/>Hardhat :8545"]
+    Dash["Dashboard<br/>:5173"]
+    V["Verify API<br/>:8088"]
+
+    A -- "coefs only" --> S
+    B -- "coefs only" --> S
+    C -- "coefs only" --> S
+    S -- "global model" --> A
+    S -- "global model" --> B
+    S -- "global model" --> C
+    S -- "logRound(round, acc, hash)" --> Chain
+    Chain -- "read-only" --> Dash
+    Dash -- "your weights" --> V
+    V -- "match / mismatch" --> Dash
+```
+
+1. Each organisation trains on its own rows and sends **only the updated coefficients** — no records cross a link.
+2. The server averages the three updates (FedAvg) and sends the **global model back to all three**.
+3. The round number, accuracy, and weight hash are sealed into **FLAuditLog**, which has no edit or delete function.
+4. The **dashboard** displays it all; the **Verify tab** lets anyone recompute the average and check its fingerprint against the chain.
+
+---
+
 ## Quickstart
 
 ```

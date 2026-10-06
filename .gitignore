@@ -35,3 +35,6 @@ app/deprecated
 # Runtime artifacts written during a run, not source
 app/round_results.json
 data/dataset_meta.json
+
+# Video added to .gitignore as we cant send big files on github.
+outputs/Fedledger-Demo.mp4
