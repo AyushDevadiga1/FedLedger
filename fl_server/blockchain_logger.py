@@ -19,6 +19,18 @@ import numpy as np
 
 from fl_server.fedavg import compute_weight_hash
 
+
+class RoundIndexOutOfBounds(Exception):
+    """The requested index is above the chain's head.
+
+    Separate from a hash mismatch because the two mean opposite things: a
+    mismatch is a claim about a record that exists, while an out-of-bounds
+    index is the caller referring to a round that was never written. Ethereum
+    keeps those apart for the same reason -- asking for a block above the head
+    is a missing block, never evidence of a tampered one.
+    """
+
+
 class BlockchainLogger:
     """
     Handles all interaction with the FLAuditLog smart contract.
@@ -141,7 +153,20 @@ class BlockchainLogger:
         # comment here blamed this wait for missing rounds, which was wrong —
         # TimeExhausted merely converts a wait into an exception that
         # aggregate_fit swallows into tx_hash "0x0".
-        self.w3.eth.wait_for_transaction_receipt(tx_hash, timeout=30) # Wait for mining
+        receipt = self.w3.eth.wait_for_transaction_receipt(tx_hash, timeout=30) # Wait for mining
+
+        # A receipt is proof of INCLUSION, not of SUCCESS. status 0x0 means the
+        # transaction was mined into a block and then reverted, so FLAuditLog
+        # never appended anything -- yet the transaction still has a perfectly
+        # valid hash. Returning it would hand the dashboard a "logged" round
+        # that does not exist on-chain, and because the dashboard derives its
+        # chain index by counting logged rows, every later index would be off
+        # by one and would verify the wrong round. Raising here keeps the
+        # failure in the channel the caller already handles (tx_hash "0x0").
+        if receipt.get('status') == 0:
+            raise RuntimeError(
+                f'logRound reverted on-chain (status 0x0, tx {Web3.to_hex(tx_hash)})'
+            )
 
         # HexBytes.hex() drops the "0x" prefix in current hexbytes releases,
         # which breaks the dashboard's block-explorer link. to_hex() is
@@ -168,7 +193,23 @@ class BlockchainLogger:
           4. Return the dict
         """
 
-        raw_round_data = self.contract.functions.getRound(round_index).call()
+        try:
+            raw_round_data = self.contract.functions.getRound(round_index).call()
+        except Exception as exc:
+            # The contract reverts with require(index < rounds.length). That is
+            # a missing record, not a corrupt one, so it is translated rather
+            # than surfaced as a generic failure.
+            #
+            # The node being down also raises here, and that is NOT the same
+            # thing -- "I cannot reach the chain" must not be reported as
+            # "that round does not exist". Only translate while the node is
+            # actually answering, which also keeps total_rounds() callable.
+            if not self.w3.is_connected():
+                raise
+            raise RoundIndexOutOfBounds(
+                f'chain index {round_index} is at or above the head '
+                f'({self.total_rounds()} rounds logged)'
+            ) from exc
         
         round_dict = {
             "roundNumber": raw_round_data[0],
@@ -187,6 +228,53 @@ class BlockchainLogger:
         """
         return self.contract.functions.totalRounds().call()
 
+    def verify_round_detail(
+        self,
+        round_index: int,
+        weights_to_verify: List[np.ndarray],
+    ) -> dict:
+        """
+        Compare recomputed weights against the stored record, returning BOTH
+        hashes so a reader can see what was actually compared.
+
+        A bare True/False is a verdict with no evidence attached. Every real
+        verification tool shows the two values side by side, because "they
+        differ" and "here is what each one says" are different claims and only
+        the second one is checkable by a third party.
+
+        Note the stored value is keccak256 over the *hex text* of a SHA-256
+        digest, not the digest itself (see log_round). The recomputed value is
+        returned pre-keccak as `weightHash` so both layers stay visible:
+        `sha256` is what FedLedger commits to, `stored` is the bytes32 on-chain.
+
+        Raises:
+            RoundIndexOutOfBounds: index is above the head.
+        """
+        stored_round = self.get_round(round_index)
+        stored_hash = stored_round["modelHash"]
+
+        weight_hash = compute_weight_hash(weights_to_verify)
+        calc_bytes = self.w3.keccak(text=weight_hash)
+        calc_hex = calc_bytes.hex()
+
+        # Handle cases where get_round might return a string with or without the '0x' prefix
+        if not stored_hash.startswith("0x"):
+            stored_hash = "0x" + stored_hash
+        if not calc_hex.startswith("0x"):
+            calc_hex = "0x" + calc_hex
+
+        match = calc_hex == stored_hash
+        return {
+            "match": match,
+            "stored": stored_hash,
+            "recomputed": calc_hex,
+            "weightHash": weight_hash,
+            "roundNumber": stored_round["roundNumber"],
+            "accuracy": stored_round["accuracy"],
+            "timestamp": stored_round["timestamp"],
+            "totalRounds": self.total_rounds(),
+        }
+
     def verify_round(self, round_index: int, weights_to_verify: List[np.ndarray]) -> bool:
         """
         Verify that weights produce the hash stored on-chain for this round.
@@ -199,31 +287,20 @@ class BlockchainLogger:
         Returns:
             True if hash matches on-chain record, False if tampering detected
 
-        TODO:
-          1. Get stored round: self.get_round(round_index)
-          2. Recompute hash from weights_to_verify
-          3. Compare recomputed hash to stored modelHash
-          4. Return True if match, False if mismatch
+        Delegates to verify_round_detail so there is exactly one comparison
+        path -- an audit that reports two different answers depending on which
+        entry point a caller used would be worthless.
         """
-        
-        stored_round = self.get_round(round_index)
-        stored_hash = stored_round["modelHash"]
+        detail = self.verify_round_detail(round_index, weights_to_verify)
 
-        calc_weight_hash = compute_weight_hash(weights_to_verify)
-        calc_weight_hash_bytes = self.w3.keccak(text=calc_weight_hash)
-
-        calc_weight_hash_hex = calc_weight_hash_bytes.hex()
-
-        # Handle cases where get_round might return a string with or without the '0x' prefix
-        if not stored_hash.startswith("0x"):
-            stored_hash = "0x" + stored_hash
-        if not calc_weight_hash_hex.startswith("0x"):
-            calc_weight_hash_hex = "0x" + calc_weight_hash_hex
-
-        # Compare recomputed hash to stored modelHash and return outcome
-        if calc_weight_hash_hex == stored_hash:
-            print(f"✅ Round {round_index} Integrity Verified! Hashes match.")
+        if detail["match"]:
+            print(f"✅ Chain index {round_index} verified: hashes match.")
             return True
-        else:
-            print(f"❌ WARNING: Tampering detected for Round {round_index}! Hashes mismatch.")
-            return False        
+
+        print(
+            f"❌ Hash mismatch at chain index {round_index} "
+            f"(round {detail['roundNumber']}).\n"
+            f"   on-chain : {detail['stored']}\n"
+            f"   submitted: {detail['recomputed']}"
+        )
+        return False        

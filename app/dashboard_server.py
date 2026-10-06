@@ -39,10 +39,18 @@ DATASET_META = ROOT / 'data' / 'dataset_meta.json'
 
 # eth_call is included because every getter used here is a `view` function.
 # Nothing that can change state is forwarded.
+#
+# eth_getBlockByNumber is here for the genesis hash only. A chain index is
+# meaningless without knowing WHICH chain it belongs to: restart the Hardhat
+# node or redeploy the contract and index 0 is a different record with the
+# same index. Genesis hash is how Ethereum itself identifies a chain, so
+# reading it is what lets the dashboard refuse to compare across two of them.
+# Block bodies cannot be mutated by a caller, so this stays read-only.
 READ_ONLY_METHODS = frozenset({
     'eth_blockNumber',
     'eth_chainId',
     'eth_call',
+    'eth_getBlockByNumber',
     'eth_getTransactionByHash',
     'eth_getTransactionReceipt',
 })
