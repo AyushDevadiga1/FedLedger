@@ -83,13 +83,15 @@ export function directionFor(phase: PhaseId | null): FlowDirection {
  * Milliseconds each phase holds before advancing, at 1× speed.
  *
  * `send` is deliberately the longest: the graph sends the three uploads one
- * organisation after another down their own threads, so the phase has to
- * outlast two staggers plus the final trip or the last node gets cut off
- * mid-flight. Every other phase holds roughly one animation of its own.
+ * organisation after another down their own threads, and each arriving dot
+ * lands a chip in the server's inbox — so the phase has to outlast the last
+ * stagger plus the final trip plus that last chip's arrival, or the third
+ * node gets cut off mid-flight. Every other phase holds roughly one
+ * animation of its own.
  */
 export const PHASE_DURATION_MS: Record<PhaseId, number> = {
   train: 1300,
-  send: 1750,
+  send: 1900,
   aggregate: 1300,
   seal: 1150,
   distribute: 1250,

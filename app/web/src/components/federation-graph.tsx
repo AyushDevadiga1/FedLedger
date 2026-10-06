@@ -14,29 +14,76 @@ import {
   type Node,
   type NodeProps,
 } from '@xyflow/react'
+// React Flow ships no stylesheet of its own: without this import every
+// node computes position: static and falls into document flow (a diagonal
+// staircase instead of the designed rows), and the edge-label layer is
+// unpositioned. Co-located here so the diagram owns its dependency.
+import '@xyflow/react/dist/style.css'
 import { memo, useEffect, useMemo, useRef } from 'react'
 import { Maximize2, Minus, Plus, ShieldCheck } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
+import { revealStyle } from '@/lib/motion'
 import { formatAccuracy, shortHash, type LedgerRound } from '@/lib/ledger'
 import { directionFor, type FlowDirection, type PhaseId } from '@/lib/phases'
 import { ORGANISATIONS } from '@/lib/federation'
 
 /* ── layout ───────────────────────────────────────────────────────────
-   Wide and shallow rather than square: the panel it renders into is
-   landscape, and a diagram whose bounding box matches the panel gets the
-   highest fit-view zoom. The old 230px pitch left the whole thing drawn
-   small with dead margin on both sides. */
+   Three tiers with real channels between them: organisations on top, the
+   global model in the middle, the ledger below. The channels are the
+   stage the edges perform on — each tier gap is ~85–95px so the up/down
+   payloads, their three staggered labels and the seal trip all live in
+   open space instead of being drawn across the cards they connect. The
+   pitch between organisations leaves a similar gap horizontally. Wide
+   and shallow overall: the panel is landscape, and a diagram whose
+   bounding box matches it gets the highest fit-view zoom. */
 
-const ORG_PITCH = 300
+const ORG_PITCH = 320
 const ORG_W = 210
 const SERVER_W = 300
 const CHAIN_W = 470
 const ORG_Y = 0
-const SERVER_Y = 150
-const CHAIN_Y = 305
+/** Channel 1 — org row (~115px tall) down to the server: the upload and
+ *  download lane, whose three staggered labels need the room. */
+const SERVER_Y = 210
+/** Channel 2 — server (~150px tall) down to the ledger: the seal lane,
+ *  sized so the logRound() dot has an actual journey and its label
+ *  clears both cards instead of straddling them. */
+const CHAIN_Y = 445
 /** Centre of the middle organisation — the server and chain hang off it. */
 const AXIS = ORG_PITCH + ORG_W / 2
+
+/* ── motion timings ─────────────────────────────────────────────────
+   Every number here is a 1× base. The node keyframes get their duration
+   and delay written inline, divided by the replay speed, so the speed
+   slider rescales edge travel and node motion together — and one number
+   per event keeps the choreography honest: a chip is scheduled from the
+   same stagger and travel the edge dot uses, so the two arrive as one
+   event rather than a dot followed by an unrelated flash. */
+
+/** Local fit: each organisation's progress bar fills just before the
+ *  train phase would end, so the fill always completes in time. */
+const FIT_MS = 1100
+/** One organisation's update chip fading in as its dot lands. */
+const ARRIVE_MS = 260
+/** The chip starts this many ms before the dot's trip ends, reading as
+ *  "deposited on arrival" instead of dot-lands-then-flash. */
+const ARRIVE_LEAD_MS = 120
+/** Aggregate: the three updates sliding together into the middle. */
+const CONVERGE_MS = 560
+/** Aggregate: the FedAvg result popping in on top of them. */
+const MERGE_IN_MS = 340
+/** When that pop starts, measured from the phase — it overlaps the last
+ *  stretch of the converge so the result appears to be made by it. */
+const MERGE_DELAY_MS = 480
+
+/** Milliseconds between one organisation's upload and the next's. */
+const UPLOAD_STAGGER_MS = 520
+/** One upload's travel time. Three trips plus the last arriving chip must
+ *  fit inside PHASE_DURATION_MS.send, which is why send is the long phase. */
+const UPLOAD_TRAVEL_MS = 640
+const RETURN_TRAVEL_MS = 720
+const SEAL_TRAVEL_MS = 520
 
 /* ── node data ─────────────────────────────────────────────────────── */
 
@@ -53,6 +100,8 @@ interface OrgData extends Record<string, unknown> {
   status: OrgStatus
   /** Draw the dashed privacy boundary: only while local rows exist inside. */
   sealed: boolean
+  /** Replay speed, so the local-fit fill scales with the speed control. */
+  timeScale?: number
 }
 
 interface ServerData extends Record<string, unknown> {
@@ -60,6 +109,13 @@ interface ServerData extends Record<string, unknown> {
   state: 'idle' | 'working'
   /** One line naming what the server is doing right now. */
   note: string
+  /** Which replay phase the inbox strip should draw, or 'idle'. */
+  stage: PhaseId | 'idle'
+  /** Replay speed for the arrival / converge keyframes. */
+  timeScale: number
+  /** False skips the converge choreography and renders the merged result
+   *  directly — the final state, with nothing having moved. */
+  motionOn: boolean
 }
 
 interface ChainEntry {
@@ -69,11 +125,22 @@ interface ChainEntry {
   txHash: string
 }
 
+/** The block the seal phase is writing this instant. */
+interface ChainSeal {
+  /** 0-based index it will occupy — drives its # label. */
+  chainIndex: number
+  round: number
+  accuracy: number | null
+}
+
 interface ChainData extends Record<string, unknown> {
   /** Newest block first, as a ledger reads. */
   entries: ChainEntry[]
-  /** Round being hashed this instant — drawn as an in-flight row, not a block. */
-  minting: number | null
+  /** In-flight block, drawn as a dashed hashing row above the list. */
+  sealing: ChainSeal | null
+  /** While seal replays a historical round, the real newest block is
+   *  withheld from the list so it can drop in when the phase completes. */
+  hiddenChainIndex: number | null
 }
 
 const ORG_ICON: Record<string, string> = {
@@ -113,7 +180,8 @@ const ORG_BORDER: Record<OrgStatus, string> = {
  * shard is most at risk.
  */
 function OrgNode({ data }: NodeProps<Node<OrgData, 'org'>>) {
-  const { name, rows, status, sealed } = data
+  const { name, rows, status, sealed, timeScale = 1 } = data
+  const scale = timeScale > 0 ? timeScale : 1
 
   return (
     <div className="relative">
@@ -140,9 +208,9 @@ function OrgNode({ data }: NodeProps<Node<OrgData, 'org'>>) {
         )}
         style={{ width: ORG_W }}
       >
-        {/* Both handles sit on the bottom edge because the server is below.
-            They are split left/right and given explicit ids so the outbound
-            and inbound links take separate paths instead of overlapping. */}
+        {/* One handle, one lane: this organisation talks to the server
+            over a single line that carries both directions — coefs up,
+            the global model down — so only one endpoint is needed here. */}
         <Handle
           id="out"
           type="source"
@@ -194,19 +262,36 @@ function OrgNode({ data }: NodeProps<Node<OrgData, 'org'>>) {
             0 rows sent
           </span>
         </div>
-        <Handle
-          id="in"
-          type="target"
-          position={Position.Bottom}
-          style={{ left: '70%' }}
-        />
+        {/* Local training, made visible: a fill bar that runs once per
+            entry into the train phase. The track is always in the layout
+            (invisible outside train) so the card never changes height —
+            a resizing card would drag the edge handles with it. Under the
+            reduced switch the keyframe dies and the bar renders full: the
+            state stays readable, nothing moves. */}
+        <div
+          aria-hidden
+          className={cn(
+            'mt-1.5 h-1 overflow-hidden bg-border/70',
+            status !== 'training' && 'invisible',
+          )}
+        >
+          {status === 'training' ? (
+            <div
+              className="fedledger-fit h-full bg-primary"
+              style={{
+                animationDuration: `${Math.round(FIT_MS / scale)}ms`,
+              }}
+            />
+          ) : null}
+        </div>
       </div>
     </div>
   )
 }
 
 function ServerNode({ data }: NodeProps<Node<ServerData, 'server'>>) {
-  const { accuracy, state, note } = data
+  const { accuracy, state, note, stage, timeScale, motionOn } = data
+  const scale = timeScale > 0 ? timeScale : 1
   return (
     <div
       className={cn(
@@ -215,22 +300,17 @@ function ServerNode({ data }: NodeProps<Node<ServerData, 'server'>>) {
       )}
       style={{ width: SERVER_W }}
     >
-      {/* 'in' and 'dist' both live on the top edge because the organisations
-          sit above the server; 'chain' leaves downward to the ledger. Explicit
-          ids are required — two handles sharing a null id cannot be told apart
-          by the edge resolver, which is what made the inbound link attach to
-          the wrong one. */}
+      {/* 'in' sits on the top edge because the organisations are above and
+          share that one endpoint for both directions of travel; 'chain'
+          leaves downward to the ledger. Explicit ids are required — two
+          handles sharing a null id cannot be told apart by the edge
+          resolver, which is what made the inbound link attach to the wrong
+          one. */}
       <Handle
         id="in"
         type="target"
         position={Position.Top}
         style={{ left: '30%' }}
-      />
-      <Handle
-        id="dist"
-        type="source"
-        position={Position.Top}
-        style={{ left: '70%' }}
       />
       <div className="flex items-baseline justify-between gap-2">
         <span className="font-mono text-sm font-medium text-foreground">
@@ -251,6 +331,110 @@ function ServerNode({ data }: NodeProps<Node<ServerData, 'server'>>) {
           global test acc
         </span>
       </div>
+
+      {/* The server's inbox, one shape per phase: three empty slots while
+          it waits for updates, a chip landing per upload during send, the
+          three chips sliding together into the FedAvg result during
+          aggregate, then the result itself. The row keeps a fixed height
+          in every stage so the node never resizes and its edge handles
+          stay put. Re-keyed per phase so each move's keyframes run once
+          on entry — a single move, never a loop. */}
+      <div
+        aria-hidden
+        key={stage}
+        className="mt-2 flex min-h-6 items-center"
+      >
+        {stage === 'train' ? (
+          <div className="flex w-full items-center gap-2">
+            {ORGANISATIONS.map((org, i) => (
+              <span
+                key={org.id}
+                style={revealStyle(i)}
+                className="fedledger-reveal flex-1 truncate border border-dashed border-border px-1 py-0.5 text-center font-mono text-2xs text-subtle"
+              >
+                {org.name}
+              </span>
+            ))}
+          </div>
+        ) : null}
+
+        {stage === 'send' ? (
+          <div className="flex w-full items-center gap-2">
+            {ORGANISATIONS.map((org, i) => (
+              <span
+                key={org.id}
+                className="relative flex-1 truncate border border-dashed border-border px-1 py-0.5 text-center font-mono text-2xs"
+              >
+                {/* Slot behind, chip on top: during the delay the chip is
+                    held invisible by the backwards fill, so the dashed
+                    slot reads as "still waiting" until its dot lands. */}
+                <span className="text-subtle">{org.name}</span>
+                <span
+                  className="fedledger-arrive absolute inset-0 flex items-center justify-center border border-primary/50 bg-accent text-primary"
+                  style={{
+                    animationDelay: `${Math.max(
+                      0,
+                      Math.round(
+                        (i * UPLOAD_STAGGER_MS +
+                          UPLOAD_TRAVEL_MS -
+                          ARRIVE_LEAD_MS) /
+                          scale,
+                      ),
+                    )}ms`,
+                    animationDuration: `${Math.round(ARRIVE_MS / scale)}ms`,
+                  }}
+                >
+                  {org.name}
+                </span>
+              </span>
+            ))}
+          </div>
+        ) : null}
+
+        {stage === 'aggregate' ? (
+          <div className="relative flex w-full items-center gap-2">
+            {/* Three separate updates only exist while they are merging;
+                with motion off the merged result renders on its own so the
+                reduced state is the final state, not two layers stacked. */}
+            {motionOn
+              ? ORGANISATIONS.map((org, i) => (
+                  <span
+                    key={org.id}
+                    className={cn(
+                      'flex-1 truncate border border-primary/50 bg-accent px-1 py-0.5 text-center font-mono text-2xs text-primary',
+                      i === 0
+                        ? 'fedledger-converge-l'
+                        : i === ORGANISATIONS.length - 1
+                          ? 'fedledger-converge-r'
+                          : 'fedledger-converge-m',
+                    )}
+                    style={{
+                      animationDuration: `${Math.round(CONVERGE_MS / scale)}ms`,
+                    }}
+                  >
+                    {org.name}
+                  </span>
+                ))
+              : null}
+            <span
+              className="fedledger-merged absolute inset-0 flex items-center justify-center border border-verified/40 bg-accent font-mono text-2xs text-verified"
+              style={{
+                animationDelay: `${Math.round(MERGE_DELAY_MS / scale)}ms`,
+                animationDuration: `${Math.round(MERGE_IN_MS / scale)}ms`,
+              }}
+            >
+              3 updates → 1 global model
+            </span>
+          </div>
+        ) : null}
+
+        {stage === 'seal' || stage === 'distribute' ? (
+          <span className="flex w-full items-center justify-center border border-verified/40 bg-accent px-1 py-0.5 font-mono text-2xs text-verified">
+            3 updates → 1 global model
+          </span>
+        ) : null}
+      </div>
+
       <div className="mt-2 flex items-center justify-between gap-2 border-t border-border pt-2">
         <span className="font-mono text-2xs text-subtle">weighted mean</span>
         <span
@@ -280,10 +464,20 @@ function ServerNode({ data }: NodeProps<Node<ServerData, 'server'>>) {
  * round is a row with its block number, accuracy and transaction hash, newest
  * on top, and a row mounting for the first time drops in with the
  * fedledger-slot overshoot — so a live run shows the chain being written one
- * round at a time instead of a chip count jumping.
+ * round at a time instead of a chip count jumping. During seal the block
+ * being written is withheld from the list and drawn as a dashed hashing row
+ * carrying its real round and accuracy, so leaving the phase drops that
+ * actual block into place.
  */
 function ChainNode({ data }: NodeProps<Node<ChainData, 'chain'>>) {
-  const { entries, minting } = data
+  const { entries, sealing, hiddenChainIndex } = data
+  // While seal replays a historical round the newest block is withheld —
+  // the dashed row above IS that block, in flight; it drops into the list
+  // (fedledger-slot) the moment the phase completes.
+  const visible =
+    hiddenChainIndex === null
+      ? entries
+      : entries.filter((e) => e.chainIndex !== hiddenChainIndex)
 
   return (
     <div
@@ -298,23 +492,28 @@ function ChainNode({ data }: NodeProps<Node<ChainData, 'chain'>>) {
           <span className="font-mono text-2xs text-subtle">Hardhat :8545</span>
         </div>
         <span className="font-mono text-2xs text-muted-foreground">
-          {entries.length} block{entries.length === 1 ? '' : 's'} · append-only
+          {visible.length} block{visible.length === 1 ? '' : 's'} · append-only
         </span>
       </div>
 
-      <div className="max-h-[168px] min-h-[74px] overflow-y-auto py-1">
+      <div className="max-h-[132px] min-h-[74px] overflow-y-auto py-1">
         <ul>
-          {minting !== null ? (
+          {sealing !== null ? (
             <li
               key="minting"
               className="flex items-baseline gap-3 border-b border-dashed border-primary/40 px-1 py-1.5"
             >
               <span className="font-mono text-xs text-primary">
-                #{entries.length + 1}
+                #{sealing.chainIndex + 1}
               </span>
               <span className="font-mono text-xs text-primary">
-                round {minting}
+                round {sealing.round}
               </span>
+              {sealing.accuracy !== null ? (
+                <span className="font-mono text-xs text-primary">
+                  {formatAccuracy(sealing.accuracy)}
+                </span>
+              ) : null}
               <span className="truncate font-mono text-2xs text-subtle">
                 sha256(global weights)…
               </span>
@@ -324,12 +523,12 @@ function ChainNode({ data }: NodeProps<Node<ChainData, 'chain'>>) {
             </li>
           ) : null}
 
-          {entries.length === 0 && minting === null ? (
+          {visible.length === 0 && sealing === null ? (
             <li className="px-1 py-4 text-center font-mono text-xs text-subtle">
               no blocks yet — nothing has been sealed
             </li>
           ) : (
-            entries.map((entry) => (
+            visible.map((entry) => (
               <li
                 key={entry.chainIndex}
                 className="fedledger-slot flex items-baseline gap-3 border-b border-border/60 px-1 py-1.5 last:border-b-0"
@@ -370,31 +569,30 @@ function ChainNode({ data }: NodeProps<Node<ChainData, 'chain'>>) {
 
 interface PayloadData extends Record<string, unknown> {
   label: string
-  direction: FlowDirection
   /**
-   * Which way this edge carries its payload, in screen terms: 'up' when the
-   * source sits below the target, 'down' when it sits above. Only the edge
-   * whose lane equals the current phase direction lights up, so this has to
-   * describe the real geometry — an edge whose lane is mislabelled never
-   * animates and the flow silently looks dead.
-   */
-  lane: FlowDirection
-  /**
-   * Whether this edge carries a payload right now. Computed by the graph
-   * builder rather than derived in the edge component, so the phase -> lane
-   * decision lives in exactly one place and cannot drift from the geometry.
+   * Whether the line is carrying a payload right now. Computed by the
+   * graph builder rather than derived in the edge component, so the
+   * phase decision lives in exactly one place.
    */
   live: boolean
+  /**
+   * Run the dot path-end → path-start. The global model shares the
+   * organisation's single line but travels it the other way, so the
+   * reverse trip samples the very same curve backwards instead of
+   * needing a second guide path that could drift out of sync.
+   */
+  reverse?: boolean
   tone: 'accent' | 'verified'
-  /** Vertical nudge, in px, applied to the edge label. */
+  /** Vertical nudge, in px, staggered per organisation so the three
+   *  labels sharing the channel never land on one row. */
   labelDy?: number
   /**
    * How long to hold before this dot leaves, and how long the trip takes.
    *
    * Up-links are given a per-organisation delay so the three uploads go one
-   * after another down their own threads — which is what actually happens:
+   * after another down their own thread — which is what actually happens:
    * each node ships its own update, they are not a single broadcast. The
-   * down-link has no delay because the server really does return the global
+   * download has no delay because the server really does return the global
    * model to everyone at once.
    *
    * Both numbers are *base* timings at 1x speed. The edge divides them by
@@ -408,6 +606,38 @@ interface PayloadData extends Record<string, unknown> {
   timeScale?: number
   motionOn?: boolean
 }
+
+/**
+ * Run a motion-path tween backwards.
+ *
+ * `createMotionPath` hands anime a `{ from: 0, to: pathLength, modifier }`
+ * factory — the modifier already maps any progress value onto a point of
+ * the curve, so swapping the endpoints walks exactly the same sampled
+ * line in reverse. One guide path per line, no second curve to keep in
+ * sync, and the dot can never drift off the line it is drawn on.
+ */
+type MotionValue = ReturnType<typeof svg.createMotionPath>['translateX']
+
+const reverseMotion = (fn: MotionValue): MotionValue =>
+  (target, index, targets, prevTween) => {
+    const tween = fn(target, index, targets, prevTween)
+    if (
+      typeof tween === 'object' &&
+      tween !== null &&
+      !Array.isArray(tween) &&
+      'from' in tween &&
+      'to' in tween
+    ) {
+      // The factory builds a fresh tween object on every call, so swapping
+      // its endpoints in place cannot affect any other animation. `to` is
+      // declared wider than `from` (it also accepts keyframe pairs), hence
+      // the single narrowing cast on that one assignment.
+      const from = tween.from
+      tween.from = tween.to as typeof from
+      tween.to = from
+    }
+    return tween
+  }
 
 /**
  * The animated edge.
@@ -430,6 +660,7 @@ function PayloadEdgeBase({
   targetPosition,
   data,
   markerEnd,
+  markerStart,
 }: EdgeProps<Edge<PayloadData, 'payload'>>) {
   // Arrowhead colour is decided per edge in useFederationGraph, where the
   // phase is known; React Flow renders whatever MarkerType it is handed.
@@ -447,6 +678,7 @@ function PayloadEdgeBase({
   const dotRef = useRef<SVGCircleElement>(null)
   const {
     live,
+    reverse = false,
     tone,
     label,
     labelDy = 0,
@@ -466,7 +698,10 @@ function PayloadEdgeBase({
     const delay = Math.max(Math.round(delayMs / scale), 0)
     const ramp = Math.min(160, Math.round(duration * 0.25))
 
-    const { translateX, translateY } = svg.createMotionPath(guide)
+    const { translateX: forwardX, translateY: forwardY } =
+      svg.createMotionPath(guide)
+    const translateX = reverse ? reverseMotion(forwardX) : forwardX
+    const translateY = reverse ? reverseMotion(forwardY) : forwardY
 
     const instance = animate(dot, {
       translateX,
@@ -486,7 +721,7 @@ function PayloadEdgeBase({
       instance.pause()
       instance.revert()
     }
-  }, [live, delayMs, travelMs, timeScale, motionOn])
+  }, [live, reverse, delayMs, travelMs, timeScale, motionOn])
 
   const active = live === true
   const stroke =
@@ -501,6 +736,7 @@ function PayloadEdgeBase({
         id={id}
         path={path}
         markerEnd={markerEnd}
+        markerStart={markerStart}
         style={{
           stroke: active ? stroke : 'var(--color-border-strong)',
           strokeWidth: active ? 2 : 1,
@@ -559,14 +795,6 @@ const EDGE_TYPES = {
 
 const ORGS = ORGANISATIONS
 
-/** Milliseconds between one organisation's upload and the next's. */
-const UPLOAD_STAGGER_MS = 520
-/** One upload's travel time. Three of them plus the last trip must fit
- *  inside PHASE_DURATION_MS.send, which is why send is the long phase. */
-const UPLOAD_TRAVEL_MS = 640
-const RETURN_TRAVEL_MS = 720
-const SEAL_TRAVEL_MS = 520
-
 export interface FederationGraphProps {
   phase: PhaseId | null
   accuracy: number | null
@@ -621,7 +849,7 @@ export function useFederationGraph({
   timeScale = 1,
   motionOn = true,
 }: FederationGraphProps) {
-  const direction = directionFor(phase)
+  const direction: FlowDirection = directionFor(phase)
 
   const orgStatus: OrgStatus =
     phase === 'train' || phase === 'send'
@@ -641,13 +869,65 @@ export function useFederationGraph({
     [rounds],
   )
 
-  /** The round the seal phase is currently writing, or null outside it. */
-  const minting = useMemo(() => {
-    if (phase !== 'seal') return null
+  /**
+   * Newest block first, as the ledger reads.
+   */
+  const entries = useMemo(
+    () =>
+      [...sealed]
+        .reverse()
+        .map((r) => ({
+          chainIndex: r.chainIndex,
+          round: r.round,
+          accuracy: r.accuracy,
+          txHash: r.txHash,
+        })),
+    [sealed],
+  )
+
+  /**
+   * What the seal phase draws as "in flight", or null outside it.
+   *
+   * - Live run (latest round not yet on-chain): that round is genuinely
+   *   pending — show it hashing; when the poll lands it, fedledger-slot
+   *   drops it into the list.
+   * - Replay of history (latest round already sealed): withhold the real
+   *   newest block from the list and re-mint it, so completing the phase
+   *   drops that round's actual block — number, accuracy, hash — into
+   *   place. A placeholder round that will never exist would be the lie
+   *   this dashboard refuses to tell.
+   */
+  const seal = useMemo(() => {
+    if (phase !== 'seal') {
+      return { sealing: null, hiddenChainIndex: null } as const
+    }
     const last = rounds[rounds.length - 1]
-    if (!last) return 1
-    return last.onChain ? last.round + 1 : last.round
-  }, [phase, rounds])
+    const newest = entries[0]
+    if (last && !last.onChain) {
+      return {
+        sealing: {
+          chainIndex: entries.length,
+          round: last.round,
+          accuracy: last.accuracy,
+        },
+        hiddenChainIndex: null,
+      } as const
+    }
+    if (newest) {
+      return {
+        sealing: {
+          chainIndex: newest.chainIndex,
+          round: newest.round,
+          accuracy: newest.accuracy,
+        },
+        hiddenChainIndex: newest.chainIndex,
+      } as const
+    }
+    return {
+      sealing: { chainIndex: 0, round: 1, accuracy: null },
+      hiddenChainIndex: null,
+    } as const
+  }, [phase, rounds, entries])
 
   const nodes = useMemo<Node[]>(
     () => [
@@ -660,6 +940,7 @@ export function useFederationGraph({
           rows: rows?.[i] ?? org.rows,
           status: orgStatus,
           sealed: orgStatus === 'training' || orgStatus === 'uploading',
+          timeScale,
         } satisfies OrgData,
       })),
       {
@@ -673,6 +954,9 @@ export function useFederationGraph({
               ? ('working' as const)
               : ('idle' as const),
           note: serverNote(phase),
+          stage: phase ?? 'idle',
+          timeScale,
+          motionOn,
         } satisfies ServerData,
       },
       {
@@ -680,89 +964,79 @@ export function useFederationGraph({
         type: 'chain' as const,
         position: { x: AXIS - CHAIN_W / 2, y: CHAIN_Y },
         data: {
-          entries: [...sealed]
-            .reverse()
-            .map((r) => ({
-              chainIndex: r.chainIndex,
-              round: r.round,
-              accuracy: r.accuracy,
-              txHash: r.txHash,
-            })),
-          minting,
+          entries,
+          sealing: seal.sealing,
+          hiddenChainIndex: seal.hiddenChainIndex,
         } satisfies ChainData,
       },
     ],
-    [orgStatus, accuracy, sealed, minting, phase, rows],
+    [orgStatus, accuracy, entries, seal, phase, rows, timeScale, motionOn],
   )
 
   const edges = useMemo<Edge[]>(() => {
     const list: Edge[] = []
 
     for (const [i, org] of ORGS.entries()) {
-      // Weights travelling up from the node to the aggregator, one
-      // organisation at a time: staggered so the three uploads read as three
-      // separate shipments down three separate threads rather than one glow.
+      // One line per organisation. Send and distribute share this single
+      // lane: the phase decides the colour, which end the arrowhead sits
+      // on and which way the dot runs. Two parallel curves would crowd
+      // the channel and stack their labels on top of each other.
+      const up = direction === 'up'
+      const down = direction === 'down'
       list.push({
-        id: `${org.id}-up`,
+        id: `${org.id}-link`,
         source: org.id,
         sourceHandle: 'out',
         target: 'server',
         targetHandle: 'in',
         type: 'payload',
-        markerEnd: {
-          type: MarkerType.ArrowClosed,
-          width: 14,
-          height: 14,
-          color: direction === 'up' ? 'var(--color-primary)' : 'var(--color-border-strong)',
-        },
+        // Send points an ember arrowhead into the server; distribute
+        // points a jade one into the organisation (markerStart renders
+        // at the origin end, reversed by auto-start-reverse so it faces
+        // the card); idle keeps the neutral arrow at the server end.
+        markerEnd: down
+          ? undefined
+          : {
+              type: MarkerType.ArrowClosed,
+              width: 14,
+              height: 14,
+              color: up
+                ? 'var(--color-primary)'
+                : 'var(--color-border-strong)',
+            },
+        markerStart: down
+          ? {
+              type: MarkerType.ArrowClosed,
+              width: 14,
+              height: 14,
+              color: 'var(--color-verified)',
+            }
+          : undefined,
         data: {
-          label: i === 0 ? 'coefs + intercept, no rows' : 'coefs + intercept',
-          direction,
-          lane: 'up',
-          live: direction === 'up',
-          tone: 'accent',
-          labelDy: -26 + i * 26,
-          delayMs: i * UPLOAD_STAGGER_MS,
-          travelMs: UPLOAD_TRAVEL_MS,
-          timeScale,
-          motionOn,
-        } satisfies PayloadData,
-      })
-      // Global model travelling back to every organisation simultaneously —
-      // same threads, no stagger, because the broadcast really is one fan-out.
-      list.push({
-        id: `${org.id}-down`,
-        source: 'server',
-        sourceHandle: 'dist',
-        target: org.id,
-        targetHandle: 'in',
-        type: 'payload',
-        markerEnd: {
-          type: MarkerType.ArrowClosed,
-          width: 14,
-          height: 14,
-          color:
-            direction === 'down' ? 'var(--color-verified)' : 'var(--color-border-strong)',
-        },
-        data: {
-          label: i === 0 ? 'global model → all 3' : 'global model',
-          direction,
-          lane: 'down',
-          live: direction === 'down',
-          tone: 'verified',
-          labelDy: -26 + i * 26,
-          delayMs: 0,
-          travelMs: RETURN_TRAVEL_MS,
+          label: up
+            ? i === 0
+              ? 'coefs + intercept, no rows'
+              : 'coefs + intercept'
+            : down
+              ? i === 0
+                ? 'global model → all 3'
+                : 'global model'
+              : 'coefs ↔ model',
+          live: up || down,
+          reverse: down,
+          tone: down ? 'verified' : 'accent',
+          labelDy: (i - 1) * 18,
+          delayMs: up ? i * UPLOAD_STAGGER_MS : 0,
+          travelMs: up ? UPLOAD_TRAVEL_MS : RETURN_TRAVEL_MS,
           timeScale,
           motionOn,
         } satisfies PayloadData,
       })
     }
 
-    // Server to ledger. The chain sits BELOW the server, so this payload
-    // travels down — the old edge declared lane 'up' and only ever lit up
-    // because the phase check happened to pass. An arrowhead now makes a
-    // mislabelled lane impossible to miss.
+    // Server to ledger. The chain sits below the server and this edge
+    // points straight at it, so the dot always runs forward — the
+    // arrowhead at the ledger end makes the direction unmistakable.
     list.push({
       id: 'server-chain',
       source: 'server',
@@ -778,8 +1052,6 @@ export function useFederationGraph({
       },
       data: {
         label: 'logRound() · hash',
-        direction: phase === 'seal' ? 'down' : 'none',
-        lane: 'down',
         live: phase === 'seal',
         tone: 'accent',
         delayMs: 60,

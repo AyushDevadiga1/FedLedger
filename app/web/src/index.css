@@ -216,6 +216,111 @@
   animation: fedledger-slot 420ms cubic-bezier(0.34, 1.36, 0.64, 1) 1;
 }
 
+/* ── FEDERATION REPLAY ───────────────────────────────────────────────
+   The node-level half of the five-phase choreography, paired with the
+   payload dots on the edges (the other half lives in federation-graph.tsx,
+   which drives anime.js along the paths). Every element carrying these
+   classes unmounts between phases, so each keyframe set runs exactly once
+   per phase entry: one move per move, never a loop. Durations and delays
+   are written inline, divided by the replay speed, so the speed slider
+   rescales edge travel and node motion together. The reduced switch below
+   kills them all and leaves each element's base state — a full fit bar,
+   every chip landed, the merged result — so nothing in the diagram is
+   knowable only by watching it. */
+
+/* Train — an organisation's local fit filling its own track. */
+@keyframes fedledger-fit {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+
+.fedledger-fit {
+  transform-origin: left;
+  animation: fedledger-fit cubic-bezier(0.4, 0, 0.2, 1) backwards;
+}
+
+/* Send — an update chip fading onto its slot as the dot lands. */
+@keyframes fedledger-arrive {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.fedledger-arrive {
+  animation: fedledger-arrive ease-out backwards;
+}
+
+/* Aggregate — the three updates slide together (each outer chip travels
+   its own width plus the gap, landing centred on the middle one) and the
+   FedAvg result pops in on top, held invisible until its delay is up by
+   the backwards fill. The holds in converge-m keep the middle chip visible
+   while the outer two are still travelling under it. */
+@keyframes fedledger-converge-l {
+  from {
+    transform: none;
+  }
+  to {
+    transform: translateX(calc(100% + 8px));
+    opacity: 0;
+  }
+}
+
+@keyframes fedledger-converge-r {
+  from {
+    transform: none;
+  }
+  to {
+    transform: translateX(calc(-100% - 8px));
+    opacity: 0;
+  }
+}
+
+@keyframes fedledger-converge-m {
+  0%,
+  55% {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+.fedledger-converge-l {
+  animation: fedledger-converge-l ease-in-out forwards;
+}
+
+.fedledger-converge-r {
+  animation: fedledger-converge-r ease-in-out forwards;
+}
+
+.fedledger-converge-m {
+  animation: fedledger-converge-m linear forwards;
+}
+
+@keyframes fedledger-merged {
+  from {
+    opacity: 0;
+    transform: scale(0.94);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.fedledger-merged {
+  animation: fedledger-merged cubic-bezier(0.34, 1.36, 0.64, 1) backwards;
+}
+
 /* ── MOTION SYSTEM ───────────────────────────────────────────────────
    One reveal primitive for every entrance on the page. The delay comes
    from --reveal-index (see motion.ts revealStyle), so three children and
@@ -228,7 +333,13 @@
    through to the OS setting. */
 html[data-motion='reduced'] .fedledger-reveal,
 html[data-motion='reduced'] .fedledger-hero-sheen,
-html[data-motion='reduced'] .fedledger-ambient {
+html[data-motion='reduced'] .fedledger-ambient,
+html[data-motion='reduced'] .fedledger-fit,
+html[data-motion='reduced'] .fedledger-arrive,
+html[data-motion='reduced'] .fedledger-converge-l,
+html[data-motion='reduced'] .fedledger-converge-r,
+html[data-motion='reduced'] .fedledger-converge-m,
+html[data-motion='reduced'] .fedledger-merged {
   animation: none !important;
 }
 
