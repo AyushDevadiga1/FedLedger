@@ -130,68 +130,183 @@ export function formatAccuracy(value: number | null): string {
 
 const VERIFY_URL = 'http://127.0.0.1:8088/verify'
 
+/** Machine-readable failure kinds, mirroring the codes :8088 returns. */
+export type VerifyErrorCode =
+  | 'not_found'
+  | 'bad_request'
+  | 'chain_unavailable'
+  | 'unreachable'
+  | 'timeout'
+  | 'cancelled'
+  | 'malformed'
+
+/**
+ * The evidence behind a verdict.
+ *
+ * `stored` is the bytes32 committed on-chain — keccak256 over the hex text of
+ * a SHA-256 digest, so it is a commitment rather than the digest itself.
+ * `recomputed` is the same construction applied to the submitted weights, and
+ * `weightHash` is the underlying SHA-256 hex. Both layers are returned because
+ * only the pair can be compared by eye, and because calling `stored` a "model
+ * hash" without saying which layer it is would be the kind of imprecision
+ * this whole page exists to avoid.
+ */
+export interface VerifyEvidence {
+  /** keccak(sha256_hex) as stored in FLAuditLog.modelHash. */
+  stored: string
+  /** keccak(sha256_hex) of the submitted weights. */
+  recomputed: string
+  /** SHA-256 of the serialised weights, pre-keccak. */
+  weightHash: string
+  /** Round number as the CONTRACT records it, not as the local file claims. */
+  roundNumber: number
+  accuracy: number
+  timestamp: number
+  /** Rounds the contract held at verification time. */
+  totalRounds: number
+}
+
 export type VerifyOutcome =
-  | { status: 'match'; chainIndex: number }
-  | { status: 'mismatch'; chainIndex: number }
-  | { status: 'error'; chainIndex: number; message: string }
+  | { status: 'match'; chainIndex: number; evidence: VerifyEvidence }
+  | { status: 'mismatch'; chainIndex: number; evidence: VerifyEvidence }
+  | {
+      status: 'error'
+      chainIndex: number
+      message: string
+      code: VerifyErrorCode
+    }
+
+/**
+ * Copy for each failure kind.
+ *
+ * `not_found` is worded deliberately: a request for a round the chain never
+ * wrote is a gap in the record, and saying so keeps it from being read as an
+ * altered one. Every message here describes a failure to CHECK something, not
+ * a finding about the data — only a completed comparison may draw that
+ * conclusion.
+ */
+const ERROR_COPY: Record<VerifyErrorCode, string> = {
+  unreachable:
+    'The verifier on :8088 is not running. Start it with python app/verify_server.py.',
+  not_found:
+    'That chain index has no record. The chain holds fewer rounds than the index asks for — this is a missing round, not an altered one.',
+  bad_request: 'The verifier rejected the request as malformed.',
+  chain_unavailable:
+    'The verifier could not reach the chain node on :8545, so nothing was compared.',
+  timeout: 'The verifier did not answer in time. Nothing was compared.',
+  cancelled: 'Comparison cancelled.',
+  malformed: 'The verifier replied in a form this page cannot read.',
+}
 
 /**
  * POST /verify?round=<chainIndex> with {weights:[coef_matrix, intercept_vector]}.
  *
- * Note the weights must serialise as floats. `[0.0412, -0.1188]` is fine
- * but `0` instead of `0.0` changes the JSON text, which changes the
- * SHA-256, which silently turns a genuine match into a mismatch.
+ * Two ordering decisions carry real weight here.
  *
- * The server re-serialises with `json.dumps([x.tolist() ...])`, so only the
- * numeric values and nesting have to survive — client-side formatting does not.
+ * The body is parsed BEFORE the status is judged. The verifier decodes the
+ * contract's revert reason and returns it in `error`; reading `response.ok`
+ * first threw that away and rendered every failure as "HTTP 500", including
+ * the case where the contract had plainly answered "Round index out of
+ * bounds".
+ *
+ * A timeout is imposed even though the caller may pass none. Without one, a
+ * verifier that accepts the connection and never replies leaves the caller
+ * stuck in a pending state forever with no way out.
  */
 export async function verifyRound(
   chainIndex: number,
   weights: WeightPayload,
   signal?: AbortSignal,
 ): Promise<VerifyOutcome> {
+  const controller = new AbortController()
+  const onAbort = () => controller.abort()
+  signal?.addEventListener('abort', onAbort)
+  const timer = setTimeout(() => controller.abort(), 15_000)
+
+  const fail = (
+    code: VerifyErrorCode,
+    message: string = ERROR_COPY[code],
+  ): VerifyOutcome => ({ status: 'error', chainIndex, message, code })
+
   let response: Response
   try {
     response = await fetch(`${VERIFY_URL}?round=${chainIndex}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ weights }),
-      signal,
+      signal: controller.signal,
     })
   } catch (cause) {
-    return {
-      status: 'error',
-      chainIndex,
-      message:
-        cause instanceof Error && cause.name === 'AbortError'
-          ? 'cancelled'
-          : 'verify server unreachable — run: python app/verify_server.py',
+    if (cause instanceof Error && cause.name === 'AbortError') {
+      return signal?.aborted ? fail('cancelled', 'cancelled') : fail('timeout')
     }
+    return fail('unreachable')
+  } finally {
+    clearTimeout(timer)
+    signal?.removeEventListener('abort', onAbort)
   }
 
-  if (!response.ok) {
-    return { status: 'error', chainIndex, message: `HTTP ${response.status}` }
-  }
-
-  let payload: { match?: boolean; error?: string }
+  let payload: Partial<VerifyEvidence> & { match?: boolean; error?: string; code?: string }
   try {
-    payload = (await response.json()) as { match?: boolean; error?: string }
+    payload = (await response.json()) as typeof payload
   } catch {
-    return { status: 'error', chainIndex, message: 'malformed response' }
+    return fail(
+      'malformed',
+      `The verifier replied with something that is not JSON (HTTP ${response.status}).`,
+    )
   }
 
+  // `payload.error` is checked before `response.ok` on purpose: the verifier
+  // sends the useful explanation in the body, and the status alone says
+  // nothing an operator can act on.
   if (payload.error) {
-    return { status: 'error', chainIndex, message: payload.error }
+    const code: VerifyErrorCode =
+      payload.code === 'not_found' ||
+      payload.code === 'bad_request' ||
+      payload.code === 'chain_unavailable'
+        ? payload.code
+        : response.ok
+          ? 'malformed'
+          : 'chain_unavailable'
+    return fail(code, payload.error || ERROR_COPY[code])
   }
-  return payload.match
-    ? { status: 'match', chainIndex }
-    : { status: 'mismatch', chainIndex }
+
+  if (typeof payload.match !== 'boolean' || typeof payload.stored !== 'string') {
+    return fail('malformed', 'The verifier replied without a comparison result.')
+  }
+
+  const evidence: VerifyEvidence = {
+    stored: payload.stored,
+    recomputed: payload.recomputed ?? '',
+    weightHash: payload.weightHash ?? '',
+    roundNumber: payload.roundNumber ?? -1,
+    accuracy: payload.accuracy ?? 0,
+    timestamp: payload.timestamp ?? 0,
+    totalRounds: payload.totalRounds ?? 0,
+  }
+
+  return { status: payload.match ? 'match' : 'mismatch', chainIndex, evidence }
 }
 
 /* ── polling ─────────────────────────────────────────────────────── */
 
-/** Total scalars in a round's aggregated weights (3x4 coef + 3 intercepts). */
-export const WEIGHT_FLOATS = 15
+/**
+ * Parse the chain-index box.
+ *
+ * Returns null for anything that is not a whole number in range. The Verify
+ * tab previously ran `Number.isInteger` inside its submit handler and simply
+ * returned, which left the button enabled and clicking it did nothing at all
+ * — no request, no message, no way for the user to tell that the field was
+ * wrong. Validating here means the caller always has something to show.
+ */
+export function parseChainIndex(text: string, max: number): number | null {
+  const trimmed = text.trim()
+  if (!/^\d+$/.test(trimmed)) return null
+  const value = Number(trimmed)
+  if (!Number.isInteger(value) || value < 0) return null
+  if (max >= 0 && value > max) return null
+  return value
+}
 
 /**
  * Expected weight shape: [coef_matrix, intercept_vector].
