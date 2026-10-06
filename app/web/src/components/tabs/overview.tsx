@@ -18,6 +18,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { useDatasetMeta } from '@/hooks/use-dataset-meta'
 import { parseRounds, summarise, type LedgerRound } from '@/lib/ledger'
+import { PHASES } from '@/lib/phases'
 import { revealStyle } from '@/lib/motion'
 import {
   ORGANISATIONS,
@@ -67,6 +68,133 @@ function claimsFor(floatsPerNode: number): {
     },
   ]
 }
+
+/**
+ * The argument the project rests on, in the order a reviewer asks for it:
+ * the constraint, what the system does about it, and what the chain adds that
+ * a results file on its own could not.
+ */
+const BEATS = [
+  {
+    eyebrow: 'the constraint',
+    title: 'The rows cannot be pooled',
+    body: 'Each organisation holds data it is not allowed to hand over, so the model has to travel instead of the data. Federated learning solves exactly that — and stops there: the server still sees every update and still reports every number, with nothing recording what it did in between.',
+    tone: 'fedledger-tone fedledger-tone-neutral',
+    dot: 'bg-border-strong',
+  },
+  {
+    eyebrow: 'what this does',
+    title: 'Train in place, ship coefficients',
+    body: 'Each organisation fits a logistic regression on its own shard and returns only its updated coefficients and intercept. The server takes the sample-weighted mean of the three updates — the single place weights combine — scores that global model on every node and sends it back out.',
+    tone: 'fedledger-tone fedledger-tone-accent',
+    dot: 'bg-primary',
+  },
+  {
+    eyebrow: 'what that buys',
+    title: 'A hash anyone can re-derive',
+    body: 'Every round is SHA-256 hashed and appended to FLAuditLog through logRound(). Recompute the hash from the same weights and compare it with the stored one: a match means the model you derived is the model that was sealed, and a mismatch is a difference you can point at.',
+    tone: 'fedledger-tone fedledger-tone-verified',
+    dot: 'bg-verified',
+  },
+] as const
+
+/** What each tab is for, as this page describes it. */
+const TABS_GUIDE = [
+  {
+    tab: 'Overview',
+    what: 'this page — claims, limits, snapshots',
+    tone: 'fedledger-tone fedledger-tone-accent',
+    dot: 'bg-primary',
+  },
+  {
+    tab: 'Federation',
+    what: 'one round, phase by phase, with what crosses each link',
+    tone: 'fedledger-tone fedledger-tone-accent',
+    dot: 'bg-primary',
+  },
+  {
+    tab: 'Ledger',
+    what: 'every round with its receipt read from the chain',
+    tone: 'fedledger-tone fedledger-tone-neutral',
+    dot: 'bg-border-strong',
+  },
+  {
+    tab: 'Verify',
+    what: 'recompute a round’s weight hash and compare it on-chain',
+    tone: 'fedledger-tone fedledger-tone-verified',
+    dot: 'bg-verified',
+  },
+] as const
+
+/** The two columns of the trust argument. */
+const TRUST_GAP = {
+  without: {
+    label: 'a results file alone',
+    tone: 'fedledger-tone fedledger-tone-neutral',
+    rows: [
+      'The server writes the accuracy and the weights-derived hash to a file it also owns, so a reader cannot tell a computed round from a typed one.',
+      'Nothing binds a hash to the round it belongs to. Earlier entries can be rewritten in place, and the file shows only what is there now.',
+      'To check anything you still have to trust whoever hands you the weights.',
+    ],
+  },
+  withChain: {
+    label: 'with an append-only chain',
+    tone: 'fedledger-tone fedledger-tone-verified',
+    rows: [
+      'logRound() is the only function that writes, and the contract has no counterpart that edits or removes what it wrote.',
+      'Each round becomes its own transaction: a block number, a timestamp the chain assigns, and the writer recorded as loggedBy.',
+      'The stored hash is public, so a check runs against a value nobody on the server side can quietly swap out.',
+    ],
+  },
+} as const
+
+/**
+ * What `python run_fedledger.py` actually starts, in the order it starts it.
+ * Kept as prose rather than a diagram: the Federation tab already draws the
+ * data path, and this is about processes and ports, not about arrows.
+ */
+const SERVICES = [
+  {
+    port: '—',
+    file: 'run_fedledger.py',
+    what: 'Starts everything below in order, waits for each port, then opens this page. Ctrl+C stops the lot.',
+  },
+  {
+    port: ':8545',
+    file: 'blockchain/ · hardhat node',
+    what: 'A local Ethereum chain. No gas, no testnet, no internet — the whole audit trail is reproducible on one machine.',
+  },
+  {
+    port: '—',
+    file: 'FLAuditLog.sol',
+    what: 'Deployed once per session. The deployer address is the only writer, and the contract has no update or delete entry point.',
+  },
+  {
+    port: ':8080',
+    file: 'fl_server/server.py',
+    what: 'The Flower server. Runs FedAvg over the three updates and writes app/round_results.json after every round.',
+  },
+  {
+    port: '—',
+    file: 'fl_nodes/node.py --node 1|2|3',
+    what: 'The three organisations, one script each, holding data/node1, node2 and node3. Each ships weights only.',
+  },
+  {
+    port: '—',
+    file: 'fl_server/blockchain_logger.py',
+    what: 'The web3.py bridge: SHA-256 of the aggregated weights, then one logRound() transaction per round.',
+  },
+  {
+    port: ':5173',
+    file: 'app/dashboard_server.py',
+    what: 'Serves the built dashboard and proxies read-only chain calls, so no write method ever reaches the browser.',
+  },
+  {
+    port: ':8088',
+    file: 'app/verify_server.py',
+    what: 'Recomputes a hash from supplied weights and compares it against the one the chain holds.',
+  },
+] as const
 
 function ClaimRow({
   claim,
@@ -218,82 +346,216 @@ export function OverviewTab({
     <div className="min-h-0 flex-1 overflow-y-auto">
       <div className="mx-auto flex max-w-5xl flex-col gap-5 px-6 py-6">
 
-        {/* ── what this page is ── */}
+        {/* ── what this is ── */}
         <Panel className="fedledger-hero">
           <div className="fedledger-hero-sheen" aria-hidden />
           <PanelHead
-            title="What this page shows"
-            meta="the run, and where every number comes from"
+            title="What FedLedger is"
+            meta="federated learning, with a record anyone can re-check"
           />
-          <div className="flex flex-col gap-4 px-5 py-4">
-            <p className="max-w-3xl text-sm text-muted-foreground">
-              Three organisations each fit a logistic regression on their own
-              local rows, hand the server only their updated coefficients, and
-              have every averaged round hashed and sealed into{' '}
-              <span className="font-mono text-primary">FLAuditLog</span> — a
-              Solidity contract on a local Hardhat chain. No raw row crosses a
-              link, and nothing the chain has recorded can be edited
-              afterwards.
+          <div className="flex flex-col gap-5 px-5 py-5">
+            <p className="max-w-3xl text-sm leading-relaxed text-muted-foreground">
+              Three organisations want one shared model but cannot put their
+              rows in the same place. Each fits a logistic regression on its
+              own shard and hands the server nothing but its updated
+              coefficients; the server averages the three updates, and every
+              round it produces is SHA-256 hashed and sealed into{' '}
+              <span className="font-mono text-primary">FLAuditLog</span>, a
+              Solidity contract on a local Hardhat chain. No row crosses a
+              link, and once a round is recorded there is no function in the
+              contract that can rewrite it.
             </p>
 
-            {/* auto-fit, not breakpoint-counted: two cards on a narrow
-                pane, four on a wide one, and no code change when a fifth
-                tab ever appears. */}
-            <div className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(190px,1fr))]">
-              {(
-                [
-                  {
-                    tab: 'Overview',
-                    what: 'this page — claims, limits, snapshots',
-                    tone: 'fedledger-tone fedledger-tone-accent',
-                    dot: 'bg-primary',
-                  },
-                  {
-                    tab: 'Federation',
-                    what: 'one round, phase by phase, with what crosses each link',
-                    tone: 'fedledger-tone fedledger-tone-accent',
-                    dot: 'bg-primary',
-                  },
-                  {
-                    tab: 'Ledger',
-                    what: 'every round with its receipt read from the chain',
-                    tone: 'fedledger-tone fedledger-tone-neutral',
-                    dot: 'bg-border-strong',
-                  },
-                  {
-                    tab: 'Verify',
-                    what: 'recompute a round’s weight hash and compare it on-chain',
-                    tone: 'fedledger-tone fedledger-tone-verified',
-                    dot: 'bg-verified',
-                  },
-                ] as const
-              ).map(({ tab, what, tone, dot }, i) => (
+            {/* The argument, in the order a reviewer asks for it. Each card
+                states one move; the claim panel further down is where each one
+                gets attached to something checkable. */}
+            <div className="grid gap-px border border-border bg-border [grid-template-columns:repeat(auto-fit,minmax(220px,1fr))]">
+              {BEATS.map(({ eyebrow, title, body, tone, dot }, i) => (
                 <div
-                  key={tab}
+                  key={eyebrow}
                   style={revealStyle(i)}
-                  className={`fedledger-reveal border border-border bg-card/80 px-3 py-2.5 backdrop-blur-[1px] ${tone}`}
+                  className={`fedledger-reveal fedledger-tone flex flex-col gap-1.5 bg-card px-4 py-3 ${tone}`}
                 >
                   <span className="flex items-center gap-1.5">
-                    <span
-                      aria-hidden
-                      className={`size-1.5 rounded-full ${dot}`}
-                    />
-                    <Eyebrow>{tab}</Eyebrow>
+                    <span aria-hidden className={`size-1.5 rounded-full ${dot}`} />
+                    <Eyebrow>{eyebrow}</Eyebrow>
                   </span>
-                  <p className="mt-1 text-xs text-muted-foreground">{what}</p>
+                  <span className="text-sm font-medium text-foreground">
+                    {title}
+                  </span>
+                  <p className="text-xs leading-relaxed text-muted-foreground">
+                    {body}
+                  </p>
                 </div>
               ))}
             </div>
 
-            <p className="text-xs text-subtle">
-              Every figure here is read from{' '}
-              <span className="font-mono">round_results.json</span> as the run
-              writes it, from the contract, or from{' '}
-              <span className="font-mono">dataset_meta.json</span> — none of it
-              is estimated. A value stored nowhere is listed under “what this
-              dashboard does not show” rather than filled in.
-            </p>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border border-border bg-muted/40 px-3 py-2">
+              <span className="font-mono text-xs text-subtle">one command</span>
+              <code className="font-mono text-xs text-primary">
+                python run_fedledger.py
+              </code>
+              <span className="text-xs text-subtle">
+                builds this page, starts the chain, deploys the contract, runs
+                the server and all three nodes, then opens the dashboard
+              </span>
+            </div>
           </div>
+        </Panel>
+
+        {/* ── one round, phase by phase ── */}
+        {/* Driven by PHASES, the same array the Federation scrubber steps
+            through, so the prose here cannot drift from the replay. */}
+        <Panel>
+          <PanelHead
+            title="How one round runs"
+            meta="the five phases the Federation tab replays"
+          />
+          <ol>
+            {PHASES.map((phase, i) => (
+              <li
+                key={phase.id}
+                style={revealStyle(i)}
+                className="fedledger-reveal grid gap-x-4 gap-y-1.5 border-t border-border px-5 py-3 md:grid-cols-[9rem_1fr]"
+              >
+                <div className="flex items-center gap-2">
+                  <span className="font-mono text-xs text-subtle">
+                    {phase.step}/{PHASES.length}
+                  </span>
+                  <span className="text-sm font-medium text-foreground">
+                    {phase.label}
+                  </span>
+                </div>
+                {/* items-start keeps the payload pill shrink-wrapped; as a
+                    plain flex child it would stretch the full column. */}
+                <div className="flex flex-col items-start gap-1.5">
+                  <Token
+                    tone={
+                      phase.id === 'distribute'
+                        ? 'verified'
+                        : phase.id === 'send'
+                          ? 'accent'
+                          : 'neutral'
+                    }
+                  >
+                    {phase.payload}
+                  </Token>
+                  <p className="text-sm text-muted-foreground">
+                    {phase.detail}
+                  </p>
+                </div>
+              </li>
+            ))}
+          </ol>
+          <p className="border-t border-border px-5 py-3 text-xs text-subtle">
+            Nothing in those five steps is a simulation: this is the path the
+            Python server, the three nodes and the contract actually take each
+            round. The graph on the Federation tab draws the same path and
+            replays it from the round feed.
+          </p>
+        </Panel>
+
+        {/* ── why the chain, and not a file ── */}
+        <Panel>
+          <PanelHead
+            title="Why the chain and not a results file"
+            meta="the gap a JSON file leaves open"
+          />
+          <div className="grid gap-px border-t border-border bg-border md:grid-cols-2">
+            {([TRUST_GAP.without, TRUST_GAP.withChain] as const).map(
+              ({ label, rows, tone }, i) => (
+                <div
+                  key={label}
+                  style={revealStyle(i)}
+                  className={`fedledger-reveal fedledger-tone flex flex-col gap-2.5 bg-card px-5 py-4 ${tone}`}
+                >
+                  <Eyebrow>{label}</Eyebrow>
+                  <ul className="flex flex-col gap-2">
+                    {rows.map((row) => (
+                      <li
+                        key={row}
+                        className="flex gap-2 text-sm text-muted-foreground"
+                      >
+                        <span aria-hidden className="mt-1.5 size-1 shrink-0 rounded-full bg-border-strong" />
+                        <span>{row}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ),
+            )}
+          </div>
+          <p className="border-t border-border px-5 py-3 text-xs text-subtle">
+            Scoped honestly: this runs on a local Hardhat chain, so the
+            immutability comes from what the contract does not expose rather
+            than from a distributed network making a rewrite expensive. A real
+            deployment would put the same contract on a chain the FL server
+            does not control — the contract itself would not change.
+          </p>
+        </Panel>
+
+        {/* ── what is actually running ── */}
+        <Panel>
+          <PanelHead
+            title="What is running behind this page"
+            meta="every process the launcher starts"
+          />
+          <div className="flex flex-col">
+            {SERVICES.map(({ port, file, what }, i) => (
+              <div
+                key={file}
+                style={revealStyle(i)}
+                className="fedledger-reveal grid gap-x-4 gap-y-1 border-t border-border px-5 py-3 md:grid-cols-[4.5rem_15rem_1fr] md:items-baseline"
+              >
+                <span className="font-mono text-xs text-subtle">{port}</span>
+                <span className="font-mono text-xs break-words text-primary">
+                  {file}
+                </span>
+                <span className="text-sm text-muted-foreground">{what}</span>
+              </div>
+            ))}
+          </div>
+          <p className="border-t border-border px-5 py-3 text-xs text-subtle">
+            The dashboard is served over HTTP rather than opened as a file, and
+            it reads the chain through a read-only proxy — the browser can call
+            contract getters, never a write method.
+          </p>
+        </Panel>
+
+        {/* ── the four tabs ── */}
+        <Panel>
+          <PanelHead
+            title="The four tabs"
+            meta="what each one is for"
+          />
+          {/* auto-fit, not breakpoint-counted: two cards on a narrow pane,
+              four on a wide one, and no code change when a fifth tab appears. */}
+          <div className="grid gap-px border-t border-border bg-border [grid-template-columns:repeat(auto-fit,minmax(190px,1fr))]">
+            {TABS_GUIDE.map(({ tab, what, tone, dot }, i) => (
+              <div
+                key={tab}
+                style={revealStyle(i)}
+                className={`fedledger-reveal fedledger-tone flex flex-col gap-1 bg-card px-4 py-3 ${tone}`}
+              >
+                <span className="flex items-center gap-1.5">
+                  <span
+                    aria-hidden
+                    className={`size-1.5 rounded-full ${dot}`}
+                  />
+                  <Eyebrow>{tab}</Eyebrow>
+                </span>
+                <p className="text-xs text-muted-foreground">{what}</p>
+              </div>
+            ))}
+          </div>
+          <p className="border-t border-border px-5 py-4 text-xs text-subtle">
+            Every figure on this page is read from{' '}
+            <span className="font-mono">round_results.json</span> as the run
+            writes it, from the contract, or from{' '}
+            <span className="font-mono">dataset_meta.json</span> — none of it is
+            estimated. A value stored nowhere is listed under “what this
+            dashboard does not show” rather than filled in.
+          </p>
         </Panel>
 
         {/* ── dataset in force ── */}
