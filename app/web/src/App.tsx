@@ -171,7 +171,11 @@ export function App() {
             <AuditTab rounds={visibleRounds} verified={verified} />
           </TabsContent>
           <TabsContent value="verify" className="flex min-h-0 flex-col overflow-hidden">
-            <VerifyTab rounds={visibleRounds} onVerified={markVerified} />
+            <VerifyTab
+              rounds={visibleRounds}
+              onVerified={markVerified}
+              feedIsReal={!usingMock && snapshot === null}
+            />
           </TabsContent>
         </Tabs>
       </div>
