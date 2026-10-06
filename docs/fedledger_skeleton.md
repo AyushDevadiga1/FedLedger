@@ -3,6 +3,14 @@
 Mumbai University C-Scheme | Blockchain Technology Mini-Project
 B.E. Computer Science (AI & ML) | Bharat College of Engineering
 
+> **Status: historical (original Streamlit design).** The codebase has since
+> moved on: the dashboard is a Vite/React app in `app/web/` served by
+> `app/dashboard_server.py` (no Streamlit, plotly or SQLite), and all three
+> organisations run from a single `fl_nodes/node.py --node 1/2/3` (there are
+> no `node1.py`/`node2.py`/`node3.py`). Keep this file for the reasoning and
+> algorithm walkthroughs; for the structure and commands that actually work
+> today see `README.md` and `docs/FedLedger_Reference.md`.
+
 ---
 
 ## Quick Context
@@ -18,7 +26,7 @@ the central server ran FedAvg honestly.
 Plain FL has no proof that training happened honestly. FedLedger makes every round
 permanently verifiable and tamper-proof via blockchain.
 
-**Stack:** Python 3.11, Flower (flwr), scikit-learn, Hardhat, Solidity, web3.py, Streamlit, SQLite
+**Stack:** Python 3.11, Flower (flwr), scikit-learn, Hardhat, Solidity, web3.py, React/Vite dashboard
 **Cost:** Rs. 0 | **GPU:** Not needed | **Internet:** Not needed (Hardhat runs locally)
 
 ---

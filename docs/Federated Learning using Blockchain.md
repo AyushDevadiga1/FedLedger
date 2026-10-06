@@ -3,6 +3,13 @@
 **Mumbai University — C-Scheme | B.E. Computer Science (AI & ML)**
 **Bharat College of Engineering, Badlapur**
 
+> **Status: historical project report.** Written against the original design.
+> Where it says `node1.py`/`node2.py`/`node3.py`, the code now has one
+> `fl_nodes/node.py --node N`; where it says Streamlit dashboard
+> (`app/main.py` etc.), the code now ships a Vite/React dashboard in `app/web/`
+> served by `app/dashboard_server.py`, and SQLite was never adopted. Current
+> structure and commands: `README.md` and `docs/FedLedger_Reference.md`.
+
 ---
 
 ## Table of Contents

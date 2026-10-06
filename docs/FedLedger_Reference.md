@@ -263,9 +263,9 @@ This is where everything connects. The order matters:
 
 ---
 
-## Module 7 — `app/` (HTML Dashboard + Verify Server)
+## Module 7 — `app/` (React Dashboard + Verify Server)
 
-**Why not Streamlit:** The project runs 5+ parallel processes. Streamlit can't orchestrate processes, can't do real-time animations, and requires a running Python server just to display results. A single self-contained HTML file solves all three problems — it polls a JSON file, animates via CSS/JS, and opens directly in the browser with no server needed.
+**Why not Streamlit:** The project runs 5+ parallel processes. Streamlit can't orchestrate processes and can't do real-time animations. **Why not the old single HTML file:** it was opened via `file://`, and a `file://` origin cannot `fetch()`, so the page only worked when a dev server papered over it. The dashboard is now a Vite + React app in `app/web/`, built to static files and served by `app/dashboard_server.py` over HTTP — which both gives it a real origin for `fetch()` and proxies the chain with a read-only allowlist.
 
 ---
 
@@ -273,32 +273,46 @@ This is where everything connects. The order matters:
 
 ```
 server.py  →  writes app/round_results.json after each round
-               format: [[round, accuracy, tx_hash, participants, timestamp], ...]
+               format: [[round, accuracy, tx_hash], ...]
 
-app/index.html  →  fetch('round_results.json') every 2 seconds
-                →  on new rounds: animate diagram, add block card, update chart
+app/dashboard_server.py  →  serves app/web/dist on http://127.0.0.1:5173
+               GET  /round_results.json  → that file (404 until round 1 lands)
+               GET  /chain/config        → contract address
+               GET  /dataset_meta.json   → dataset shape (iris/wine/…)
+               POST /chain/rpc           → read-only proxy to Hardhat :8545
+
+app/web (React)  →  polls round_results.json every 2 seconds
+                  →  on new rounds: replay diagram, extend ledger + chart
 ```
 
 The JSON format is a list of lists — each inner list is one round's data positionally:
 - `[0]` round number (int)
 - `[1]` accuracy (float, 0–100)
-- `[2]` tx_hash (hex string)
-- `[3]` participants (list of strings)
-- `[4]` timestamp (unix int, optional)
+- `[2]` tx_hash (hex string; `0x0` marks a round that failed to log)
 
 ---
 
-### Animation phases (driven by new data arriving)
+### Replay phases (driven by the Federation tab, `src/lib/phases.ts`)
 
 ```
-'training'     → node boxes glow purple (local training)
-'aggregating'  → weight arrows appear node→server (FedAvg running)
-'sealing'      → blockchain box pulses (logRound tx confirmed)
-'distributing' → global weight arrows appear server→nodes (next round ready)
-'idle'         → reset
+'train'      → nodes fit local models — only coefficients leave afterwards
+'send'       → weight arrows node→server (15 floats per node)
+'aggregate'  → FedAvg weighted mean on the server
+'seal'       → blockchain box pulses (logRound tx confirmed)
+'distribute' → global model arrows server→nodes (next round ready)
 ```
 
-Each phase runs for a fixed duration (`sleep(ms)`) so the animation completes in ~4.5s per round.
+Each phase also moves the nodes, not just the dots: train fills a fit bar
+inside every organisation, each arriving upload lands a chip in the
+server's inbox (three chips, one per organisation, staggered like the
+dots), and seal shows the round being hashed as an in-flight row above the
+sealed blocks. All timings derive from `src/lib/motion.ts` — the replay
+speed divides the phase clock and the dot travel together, and
+Auto / Full / Still gates every animation at once. Speed, motion
+preference and frozen snapshots persist in `localStorage`
+(`fedledger:replay-speed`, `fedledger:motion`, `fedledger:snapshot-v1`).
+
+A speed slider and a motion preference (Auto / Full / Still) control pacing; every edge is labelled with what actually crosses it.
 
 ---
 
@@ -312,8 +326,10 @@ Each phase runs for a fixed duration (`sleep(ms)`) so the animation completes in
 | Endpoint | `POST /verify?round=N` |
 | Body | `{"weights": [[coef values], [intercept values]]}` |
 | Returns | `{"match": true}` or `{"match": false, "error": "..."}` |
-| CORS | enabled — browser can call it from `file://` |
+| CORS | enabled — the dashboard on :5173 is cross-origin from it |
 | Start | `python app/verify_server.py` (or via `run_fedledger.py`) |
+| Note | prints ✅/❌ per comparison; stdout is forced to UTF-8 so a Windows console cannot crash the response |
+| Honesty | the tab knows whether the feed is live: on mock data or a frozen snapshot it labels the outcome as not-evidence-about-the-shown-run (the hash comparison itself still runs against the real chain) |
 
 ---
 
@@ -341,13 +357,17 @@ Starts everything in the correct order, opens dashboard automatically.
 ```
 Terminal 1:  cd blockchain && npx hardhat node
 Terminal 2:  cd blockchain && npx hardhat run scripts/deploy.js --network localhost
-Terminal 3:  cd fl_server && python server.py
-Terminal 4:  python fl_nodes/node.py --node 1
-Terminal 5:  python fl_nodes/node.py --node 2
-Terminal 6:  python fl_nodes/node.py --node 3
-Terminal 7:  python app/verify_server.py
-Browser:     open app/index.html
+Terminal 3:  cd app/web && npm install && npm run build
+Terminal 4:  python app/dashboard_server.py
+Terminal 5:  python -m fl_server.server        (from the repo root)
+Terminal 6:  python fl_nodes/node.py --node 1
+Terminal 7:  python fl_nodes/node.py --node 2
+Terminal 8:  python fl_nodes/node.py --node 3
+Terminal 9:  python app/verify_server.py
+Browser:     http://127.0.0.1:5173
 ```
+
+Run every Python command from the repo root: `server.py` imports `fl_server.*`, which does not resolve from inside `fl_server/`.
 
 **Data must exist first (run once ever):**
 ```
