@@ -1,0 +1,719 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>FedLedger — Complete Guide</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #ffffff;
+    color: #000000;
+    font-family: Georgia, serif;
+    font-size: 16px;
+    line-height: 1.75;
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 60px 32px 100px;
+  }
+  h1 { font-size: 28px; font-weight: bold; margin-bottom: 8px; }
+  h2 { font-size: 20px; font-weight: bold; margin-top: 52px; margin-bottom: 12px; border-bottom: 1px solid #000; padding-bottom: 4px; }
+  h3 { font-size: 16px; font-weight: bold; margin-top: 28px; margin-bottom: 6px; }
+  p  { margin-bottom: 14px; }
+  ul, ol { margin-left: 24px; margin-bottom: 14px; }
+  li { margin-bottom: 6px; }
+  code {
+    font-family: 'Courier New', monospace;
+    font-size: 14px;
+    background: #f0f0f0;
+    padding: 1px 5px;
+    border-radius: 2px;
+  }
+  pre {
+    font-family: 'Courier New', monospace;
+    font-size: 13px;
+    background: #f0f0f0;
+    padding: 16px;
+    margin: 14px 0;
+    overflow-x: auto;
+    white-space: pre;
+    line-height: 1.5;
+  }
+  .subtitle { font-size: 14px; color: #444; margin-bottom: 40px; }
+  .divider  { border: none; border-top: 2px solid #000; margin: 60px 0; }
+  .note     { border-left: 3px solid #000; padding-left: 14px; margin: 16px 0; font-style: italic; }
+</style>
+</head>
+<body>
+
+<h1>FedLedger — Complete Guide</h1>
+<div class="subtitle">
+  Federated Learning with Blockchain Audit Trail<br/>
+  B.E. Computer Science (AI &amp; ML) · Bharat College of Engineering · Mumbai University
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<hr class="divider"/>
+<h2>Part 1 — What is this project and why does it exist</h2>
+
+<p>
+  Imagine three hospitals. Each hospital has patient data and wants to train a machine learning
+  model to detect a disease. The problem: patient data is private. Hospital A cannot send its
+  records to Hospital B or to any central server. That is illegal and unethical.
+</p>
+<p>
+  The traditional solution — collect all data in one place and train one model — does not work here.
+</p>
+<p>
+  Federated Learning solves this. Instead of sharing data, each hospital trains a model on its own
+  data locally. Only the model's learned numbers (called weights) are sent to a central server.
+  The server combines those weights from all three hospitals into one improved global model and
+  sends it back. This cycle repeats for several rounds. The raw patient data never leaves any
+  hospital. Ever.
+</p>
+<p>
+  But a new problem appears: how do you trust the central server? What if the server modifies
+  the weights before combining them? What if it lies about the accuracy? There is no way to
+  verify what the server actually did.
+</p>
+<p>
+  This is what FedLedger adds on top. After every training round, the server writes a permanent,
+  tamper-proof record to a blockchain. This record contains the round number, the accuracy
+  achieved, who participated, and a cryptographic fingerprint (hash) of the model weights.
+  Anyone can look at this record and verify that the server behaved honestly.
+</p>
+<p>
+  The blockchain is the audit trail. Once something is written to it, it cannot be changed or
+  deleted. That is the guarantee.
+</p>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<hr class="divider"/>
+<h2>Part 2 — The complete project workflow in theory</h2>
+
+<h3>Step 1 — The dataset is split into private pieces</h3>
+<p>
+  We use the Iris flower dataset — 150 samples with 4 measurements each (petal length, petal
+  width, sepal length, sepal width) and a label (which of 3 flower species it is).
+</p>
+<p>
+  This dataset is split into three equal parts of 50 samples each. Each part is saved to a
+  separate folder: one for OrgA, one for OrgB, one for OrgC. After this split, the three
+  organisations never share their data with each other or with the server. The split is done
+  once before training begins.
+</p>
+
+<h3>Step 2 — The blockchain infrastructure is prepared</h3>
+<p>
+  Before training starts, we deploy a smart contract to a local simulated Ethereum blockchain
+  (run by a tool called Hardhat). Think of Hardhat as a fake blockchain that behaves exactly
+  like the real Ethereum network but costs nothing and runs on your own computer.
+</p>
+<p>
+  The smart contract is a program that lives on this blockchain. It has one job: accept audit
+  records for each training round and store them permanently. It cannot be edited or deleted.
+  The contract is called FLAuditLog.
+</p>
+<p>
+  After deployment, the contract gets an address on the blockchain (like a postal address).
+  The Python code saves this address so it can find and call the contract later.
+</p>
+
+<h3>Step 3 — A training round begins</h3>
+<p>
+  The FL server starts and waits. Three nodes (OrgA, OrgB, OrgC) connect to the server.
+  The server sends each node the current global model weights (at the start, these are zeros).
+</p>
+<p>
+  Each node takes those global weights, loads its own private 50-sample dataset, and trains
+  a logistic regression model locally. Training on 50 samples is fast — it takes a fraction
+  of a second. The node now has updated weights that reflect what it learned from its own data.
+</p>
+
+<h3>Step 4 — Weights are sent to the server, not data</h3>
+<p>
+  Each node sends only its updated weights back to the server. These are just numbers — a
+  matrix of coefficients and a vector of intercepts. They do not contain any raw data. You
+  cannot reconstruct the training data from them (with 50 samples and a simple model, the
+  privacy guarantee is not perfect, but the architectural principle is correct).
+</p>
+
+<h3>Step 5 — FedAvg combines the weights</h3>
+<p>
+  The server runs the FedAvg algorithm (Federated Averaging). This takes the three sets of
+  weights from the three nodes and combines them into one set of global weights. The combination
+  is a weighted average — each node's contribution is proportional to how many samples it
+  trained on. Since all three have 50 samples, they contribute equally.
+</p>
+<p>
+  The formula is: global_weights = (50/150) × OrgA_weights + (50/150) × OrgB_weights + (50/150) × OrgC_weights
+</p>
+<p>
+  This global model is better than any individual node's model because it has seen patterns
+  from all three datasets without any dataset being shared.
+</p>
+
+<h3>Step 6 — The round is logged to the blockchain</h3>
+<p>
+  Now the server computes a SHA-256 hash of the global weights. A hash is a fixed-length
+  fingerprint of data. If even one number in the weights changes, the hash changes completely.
+  This is the tamper detection mechanism.
+</p>
+<p>
+  The server calls the smart contract's <code>logRound()</code> function with:
+</p>
+<ul>
+  <li>Round number</li>
+  <li>Accuracy (as an integer — e.g. 74.3% is stored as 743 because Solidity has no decimal type)</li>
+  <li>List of participating nodes</li>
+  <li>The SHA-256 hash of the weights</li>
+</ul>
+<p>
+  The blockchain mines this as a transaction. It now exists permanently. The transaction hash
+  (a unique ID for this blockchain write) is saved alongside the round results.
+</p>
+
+<h3>Step 7 — Global weights are sent back to nodes</h3>
+<p>
+  The server distributes the new global weights to all three nodes. Each node now starts the
+  next round from this improved starting point. This cycle repeats for however many rounds
+  are configured (default: 10).
+</p>
+
+<h3>Step 8 — Verification</h3>
+<p>
+  At any point, any participant can verify the server's honesty. The process is:
+</p>
+<ol>
+  <li>Take the weights you received (or recompute FedAvg yourself from the node weights you saved)</li>
+  <li>Compute SHA-256 hash of those weights</li>
+  <li>Read the hash stored on the blockchain for that round</li>
+  <li>If they match, the server ran FedAvg honestly and did not modify the weights</li>
+  <li>If they do not match, the server tampered with the aggregation</li>
+</ol>
+<p>
+  This is cryptographic proof, not trust. You do not have to believe the server — you can
+  independently verify it.
+</p>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<hr class="divider"/>
+<h2>Part 3 — The complete project workflow in code</h2>
+
+<h3>Directory structure</h3>
+<pre>
+FedLedger/
+├── run_fedledger.py           ← starts everything with one command
+├── data/
+│   ├── generate_partitions.py ← splits dataset into 3 node folders
+│   ├── node1/  X.npy  y.npy  ← OrgA's private data
+│   ├── node2/  X.npy  y.npy  ← OrgB's private data
+│   └── node3/  X.npy  y.npy  ← OrgC's private data
+├── fl_nodes/
+│   └── node.py                ← Flower client, one script runs all 3 nodes
+├── fl_server/
+│   ├── server.py              ← Flower server + custom FedAvg strategy
+│   ├── fedavg.py              ← federated_average() + compute_weight_hash()
+│   └── blockchain_logger.py  ← web3.py bridge to the smart contract
+├── blockchain/
+│   ├── contracts/
+│   │   └── FLAuditLog.sol    ← the smart contract
+│   ├── scripts/
+│   │   └── deploy.js         ← deploys contract, writes contract_config.json
+│   ├── hardhat.config.js     ← Hardhat config (Solidity 0.8.19, port 8545)
+│   └── contract_config.json  ← written after deploy: address + ABI path
+├── app/
+│   ├── round_results.json    ← written by server.py after each round
+│   ├── verify_server.py      ← hash verification API on port 8088
+│   ├── dashboard_server.py   ← serves the React app on port 5173
+│   └── web/                  ← React 19 + TypeScript frontend
+│       └── src/
+│           ├── lib/
+│           │   ├── ledger.ts     ← data types, round parser
+│           │   ├── chain.ts      ← reads blockchain via eth_call
+│           │   ├── federation.ts ← node metadata, row counts
+│           │   └── phases.ts     ← 5-phase animation definitions
+│           ├── hooks/
+│           │   ├── use-round-feed.ts    ← polls round_results.json
+│           │   ├── use-replay.ts        ← scrubber state machine
+│           │   └── use-round-receipt.ts ← lazy chain reads per round
+│           └── components/tabs/
+│               ├── overview.tsx  ← Tab 1
+│               ├── training.tsx  ← Tab 2
+│               ├── audit.tsx     ← Tab 3
+│               └── verify.tsx    ← Tab 4
+└── tests/
+    ├── test_fedavg.py
+    ├── test_blockchain.py
+    └── test_verify.py
+</pre>
+
+<h3>Step 1 — Generating the data partitions</h3>
+<p>File: <code>data/generate_partitions.py</code></p>
+<p>
+  This script loads the Iris dataset from scikit-learn, shuffles it with a fixed random seed
+  so results are reproducible, splits it into three equal stratified parts (50 samples each,
+  each part has roughly equal numbers of all three flower classes), and saves them as NumPy
+  binary files (<code>.npy</code>) into <code>data/node1/</code>, <code>data/node2/</code>,
+  and <code>data/node3/</code>.
+</p>
+<p>
+  It also writes a <code>dataset_meta.json</code> file containing the dataset name, total
+  samples, number of features, and row count per node. The frontend reads this file to display
+  accurate information rather than hardcoded values.
+</p>
+<p>
+  Run once: <code>python data/generate_partitions.py</code>
+</p>
+
+<h3>Step 2 — The smart contract</h3>
+<p>File: <code>blockchain/contracts/FLAuditLog.sol</code></p>
+<p>
+  Written in Solidity, the language for Ethereum smart contracts. It defines one data structure
+  (a struct called <code>TrainingRound</code>) and stores an array of these structs on the
+  blockchain.
+</p>
+<p>
+  The struct contains: round number, accuracy (integer, ×1000), array of participant names,
+  the model hash (stored as bytes32 — exactly 32 bytes, matching SHA-256 output length),
+  a Unix timestamp, and the Ethereum address of whoever called <code>logRound()</code>.
+</p>
+<p>
+  The contract has three public functions: <code>logRound()</code> to write a record,
+  <code>getRound(index)</code> to read one record, and <code>totalRounds()</code> to get
+  the count of records written so far. There are no delete or update functions — the records
+  are permanent.
+</p>
+
+<h3>Step 3 — Deploying the contract</h3>
+<p>File: <code>blockchain/scripts/deploy.js</code></p>
+<p>
+  Hardhat first starts a simulated Ethereum node on <code>http://127.0.0.1:8545</code>.
+  This deploy script compiles <code>FLAuditLog.sol</code> and deploys it to that local chain.
+  After deployment the contract gets an address (e.g. <code>0x5FbDB2315678...</code>).
+</p>
+<p>
+  The script writes this address and the path to the compiled contract's ABI (Application
+  Binary Interface — the list of functions the contract exposes) into
+  <code>blockchain/contract_config.json</code>. The Python code reads this file to know
+  where the contract lives.
+</p>
+
+<h3>Step 4 — The FL nodes</h3>
+<p>File: <code>fl_nodes/node.py</code></p>
+<p>
+  This script uses the Flower framework's <code>NumPyClient</code> class. Flower handles
+  all the networking. You just implement four methods that Flower calls at the right time:
+</p>
+<ul>
+  <li>
+    <code>get_parameters()</code> — returns the current model weights as a list of NumPy arrays:
+    <code>[coef_, intercept_]</code>
+  </li>
+  <li>
+    <code>set_parameters()</code> — takes a list of NumPy arrays from the server and sets
+    them as the model's current weights
+  </li>
+  <li>
+    <code>fit()</code> — calls <code>set_parameters()</code> first to sync with the global
+    model, then trains the local model on the node's private data with <code>model.fit()</code>,
+    then returns the updated weights and the number of samples trained on
+  </li>
+  <li>
+    <code>evaluate()</code> — tests the global model on the node's local test set and returns
+    accuracy as loss (1 minus accuracy, because Flower expects lower to be better)
+  </li>
+</ul>
+<p>
+  The script takes a <code>--node</code> argument (1, 2, or 3) to load the right data partition.
+  Three separate terminals run the same script with different node numbers.
+</p>
+
+<h3>Step 5 — The FL server and FedAvg</h3>
+<p>Files: <code>fl_server/server.py</code> and <code>fl_server/fedavg.py</code></p>
+<p>
+  <code>server.py</code> defines a custom Flower strategy class called
+  <code>FedLedgerStrategy</code>. The key method is <code>aggregate_fit()</code>, which
+  Flower calls after collecting results from all nodes at the end of each round. This is
+  where all the important work happens:
+</p>
+<ol>
+  <li>
+    Extract the weights from each node's result. Flower wraps weights in its own format
+    called <code>Parameters</code>. Convert them back to NumPy arrays using
+    <code>fl.common.parameters_to_ndarrays()</code>.
+  </li>
+  <li>
+    Collect the sample count from each node (<code>fit_res.num_examples</code>).
+  </li>
+  <li>
+    Call <code>federated_average(weights_list, sample_counts)</code> from
+    <code>fedavg.py</code>. This computes the weighted average: for each layer (coef
+    and intercept separately), compute the sum of (node_weight × node_contribution_fraction).
+  </li>
+  <li>
+    Call <code>compute_weight_hash(global_weights)</code> which converts the weights to
+    a JSON string and computes SHA-256 of that string. Returns a 64-character hex string.
+  </li>
+  <li>
+    Call <code>self.blockchain_logger.log_round()</code> which writes the record to the
+    smart contract (explained below). Returns the transaction hash.
+  </li>
+  <li>
+    Append <code>[round_number, accuracy, tx_hash]</code> to <code>self.round_results</code>
+    and write the whole list to <code>app/round_results.json</code>. This is how the
+    dashboard reads the data.
+  </li>
+  <li>
+    Convert the global weights back to Flower's <code>Parameters</code> format and return
+    them. Flower will send these to all nodes at the start of the next round.
+  </li>
+</ol>
+
+<h3>Step 6 — The blockchain logger</h3>
+<p>File: <code>fl_server/blockchain_logger.py</code></p>
+<p>
+  This is the Python-to-Ethereum bridge. It uses the <code>web3.py</code> library to connect
+  to the Hardhat node running on port 8545.
+</p>
+<p>
+  On startup it reads <code>contract_config.json</code> to get the contract address and ABI,
+  then creates a <code>contract</code> object — a Python representation of the smart contract
+  that lets you call its functions like regular Python methods.
+</p>
+<p>
+  The <code>log_round()</code> method does five things:
+</p>
+<ol>
+  <li>Computes the SHA-256 weight hash</li>
+  <li>
+    Converts accuracy from a float (e.g. 0.743) to an integer (743) because Solidity has
+    no float type. Multiply by 1000, round, store as integer.
+  </li>
+  <li>
+    Converts the 64-character hex string hash into 32 raw bytes
+    (<code>bytes.fromhex(weight_hash)</code>) to match the Solidity <code>bytes32</code> type.
+  </li>
+  <li>
+    Calls <code>contract.functions.logRound(...).transact({"from": account})</code> which
+    sends an Ethereum transaction to the blockchain. Hardhat mines it instantly.
+  </li>
+  <li>
+    Waits for the transaction receipt with <code>w3.eth.wait_for_transaction_receipt(tx_hash)</code>
+    and returns the transaction hash as a hex string.
+  </li>
+</ol>
+<p>
+  The <code>verify_round()</code> method reads a stored round from the chain using
+  <code>contract.functions.getRound(index).call()</code> (a read, no transaction, no gas),
+  recomputes the hash from the provided weights, and compares them.
+</p>
+
+<h3>Step 7 — The verify API</h3>
+<p>File: <code>app/verify_server.py</code></p>
+<p>
+  A minimal HTTP server on port 8088. The dashboard cannot import Python directly, so when
+  a user wants to verify weights they paste them into the dashboard and click verify. The
+  dashboard sends those weights as JSON in a POST request to
+  <code>http://127.0.0.1:8088/verify?round=N</code>. This server receives them, calls
+  <code>BlockchainLogger().verify_round(N, weights)</code>, and returns
+  <code>{"match": true}</code> or <code>{"match": false}</code>.
+</p>
+<p>
+  CORS headers are included so the browser does not block the cross-origin request.
+</p>
+
+<h3>Step 8 — The launcher</h3>
+<p>File: <code>run_fedledger.py</code></p>
+<p>
+  Starts everything in the correct order and with the correct delays between steps:
+</p>
+<ol>
+  <li>Start Hardhat node (wait 3 seconds for it to be ready)</li>
+  <li>Run deploy script (blocking — must finish before Python starts)</li>
+  <li>Start FL server (wait 2 seconds for it to bind port 8080)</li>
+  <li>Start OrgA node (0.5 second gap)</li>
+  <li>Start OrgB node (0.5 second gap)</li>
+  <li>Start OrgC node (0.5 second gap)</li>
+  <li>Start verify server on port 8088</li>
+  <li>Start dashboard server on port 5173</li>
+  <li>Open <code>http://localhost:5173</code> in the browser</li>
+</ol>
+<p>
+  Each process logs to <code>logs/&lt;name&gt;.log</code>. Ctrl+C terminates everything cleanly.
+</p>
+
+<h3>Step 9 — The data bridge</h3>
+<p>
+  The server writes to <code>app/round_results.json</code> after every round. The format is
+  a JSON array where each element is a three-item array:
+  <code>[round_number, accuracy_float, tx_hash_string]</code>.
+</p>
+<p>
+  Example after 3 rounds:
+</p>
+<pre>
+[
+  [1, 72.3, "0x3d7f2a..."],
+  [2, 81.0, "0xa4c19b..."],
+  [3, 88.7, "0x6e52f0..."]
+]
+</pre>
+<p>
+  The dashboard polls this file every 2 seconds. A new entry appearing is how it knows a
+  new round has completed.
+</p>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<hr class="divider"/>
+<h2>Part 4 — The dashboard tabs explained</h2>
+
+<h3>Tab 1 — Overview</h3>
+<p>
+  This tab is a static introduction to the project. It is the first thing anyone sees when
+  they open the dashboard and it serves as context before you start training.
+</p>
+<p>It contains:</p>
+<ul>
+  <li>
+    A short explanation of what FedLedger does and why — the privacy problem, the FL solution,
+    and the blockchain audit layer.
+  </li>
+  <li>
+    The technology stack displayed as cards — Python, Flower, Hardhat, and Solidity — each
+    with a one-line description of its role.
+  </li>
+  <li>
+    A "How it works" section showing the four stages: partition data, local training, FedAvg
+    aggregation, blockchain audit.
+  </li>
+  <li>
+    Three key properties of the system: zero raw data bytes sent to the server, SHA-256 hash
+    stored on-chain per round, and append-only records (no delete or update in the contract).
+  </li>
+  <li>
+    A button to jump directly to the Live Training tab.
+  </li>
+</ul>
+<p>
+  Why it exists: a viva examiner opens the dashboard and immediately understands what they
+  are looking at without needing a separate explanation. The tab also stays accurate — it reads
+  the actual dataset metadata rather than hardcoding numbers.
+</p>
+
+<h3>Tab 2 — Federation (Live Training)</h3>
+<p>
+  This is the main interactive tab. It shows the FL process happening in real time with
+  an animated diagram.
+</p>
+<p>The diagram shows:</p>
+<ul>
+  <li>Three node boxes at the top — OrgA (bank icon), OrgB (hospital icon), OrgC (government icon)</li>
+  <li>A central FL Server box in the middle</li>
+  <li>A blockchain box at the bottom</li>
+  <li>Animated arrows connecting them that appear and move based on the current phase</li>
+</ul>
+<p>
+  The training process is divided into five phases and the diagram animates through them:
+</p>
+<ol>
+  <li><strong>Dispatch</strong> — global weights sent from server down to nodes (arrows go down)</li>
+  <li><strong>Training</strong> — each node box pulses while training locally (no arrows — data stays local)</li>
+  <li><strong>Upload</strong> — weight arrows travel upward from nodes to server</li>
+  <li><strong>Aggregate</strong> — the server box glows while FedAvg runs</li>
+  <li><strong>Commit</strong> — a transaction is written to the blockchain box</li>
+</ol>
+<p>
+  A scrubber (slider) below the diagram lets you control playback. You can drag it backward
+  to replay an earlier round, or forward to step through rounds one at a time. This is the
+  manual mode. There is also an auto mode that plays through rounds automatically, and a
+  speed control.
+</p>
+<p>
+  The sidebar next to the diagram shows a compact live feed of blockchain blocks as they are
+  committed. Each entry shows the round number, accuracy, the participating nodes, and the
+  first few characters of the weight hash.
+</p>
+<p>
+  Why it exists: this tab makes the abstract FL process visible. Without it, training is just
+  text in a terminal. With it, you can point at exactly what is happening at each moment —
+  which is what an examiner wants to see during a viva.
+</p>
+
+<h3>Tab 3 — Ledger (Audit Log)</h3>
+<p>
+  This tab shows the complete blockchain audit log in full detail.
+</p>
+<p>The left side shows a table with one row per round:</p>
+<ul>
+  <li>Round number</li>
+  <li>Accuracy percentage</li>
+  <li>Participating nodes</li>
+  <li>Full weight hash (all 64 characters)</li>
+  <li>Transaction hash (the blockchain transaction ID)</li>
+  <li>Timestamp</li>
+  <li>Verification status — whether this round's weights have been verified by the user</li>
+</ul>
+<p>
+  The right side shows an accuracy chart — a line graph of global model accuracy across all
+  rounds. This makes it visually obvious that the model is improving as rounds progress.
+  Below the chart are four summary statistics: total rounds, best accuracy, latest accuracy,
+  and number of verified blocks.
+</p>
+<p>
+  Why it exists: this is the audit trail itself. If someone questions whether training happened
+  correctly, this tab shows every single round's record exactly as it exists on the blockchain.
+  The data here comes directly from blockchain reads, not from <code>round_results.json</code>,
+  so it is the ground truth.
+</p>
+
+<h3>Tab 4 — Verify</h3>
+<p>
+  This tab is for cryptographic verification — proving that the server ran FedAvg honestly.
+</p>
+<p>The process a user follows:</p>
+<ol>
+  <li>Select a round number to verify</li>
+  <li>
+    Paste the weight array they saved from their own node (in JSON format — a 2-element array:
+    the coefficient matrix and the intercept vector)
+  </li>
+  <li>Click "Verify Hash"</li>
+</ol>
+<p>
+  What happens behind the scenes: the dashboard sends the weights to the verify server at
+  port 8088. The verify server computes SHA-256 of those weights (using the same method
+  that <code>server.py</code> used during training), then reads the hash stored on the
+  blockchain for that round, and compares them.
+</p>
+<p>
+  If they match, the dashboard shows a green "Verified" result. This means: the weights
+  the server distributed are exactly what FedAvg produced. The server did not modify them.
+</p>
+<p>
+  If they do not match, the dashboard shows a red "Mismatch" result. This means: either
+  the user pasted the wrong weights, or the server tampered with the aggregation.
+</p>
+<p>
+  There is also an "Alter one coefficient" button which deliberately corrupts one weight
+  value. This is a demo tool — clicking it and then verifying produces a mismatch, which
+  shows the examiner how tamper detection works in practice.
+</p>
+<p>
+  The right side of this tab shows a real-time event log — every verification attempt,
+  every round completion, and every connection status change is printed here with a timestamp.
+</p>
+<p>
+  Why it exists: this tab is the academic contribution of the project. FL without verification
+  requires trust in the central server. This tab shows that trust is not required — anyone
+  can verify independently. That is the core claim of the project and this tab demonstrates
+  it live.
+</p>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<hr class="divider"/>
+<h2>Part 5 — How to run the project</h2>
+
+<h3>One-time setup</h3>
+<pre>
+# Install Python dependencies
+pip install -r requirements.txt
+
+# Install Hardhat (inside blockchain/)
+cd blockchain
+npm install
+cd ..
+
+# Install frontend dependencies and build
+cd app/web
+npm install
+npm run build
+cd ../..
+
+# Generate the data partitions (once ever)
+python data/generate_partitions.py
+</pre>
+
+<h3>Every run</h3>
+<pre>
+python run_fedledger.py
+</pre>
+<p>
+  This single command starts everything. The browser opens automatically to
+  <code>http://localhost:5173</code>. Training begins immediately. Open the Federation tab
+  to watch it live.
+</p>
+
+<h3>Optional flags</h3>
+<pre>
+python run_fedledger.py --rounds 5          # run only 5 rounds instead of 10
+python run_fedledger.py --dataset digits    # use handwritten digits dataset (1797 samples)
+python run_fedledger.py --no-ui            # skip opening the browser
+python run_fedledger.py --skip-build       # skip rebuilding the frontend
+</pre>
+
+<h3>If something goes wrong</h3>
+<p>
+  Each process writes to a log file. Check these first:
+</p>
+<pre>
+logs/hardhat.log        ← Ethereum node issues
+logs/fl-server.log      ← FL training issues, blockchain write failures
+logs/node-1.log         ← OrgA training issues
+logs/node-2.log         ← OrgB training issues
+logs/node-3.log         ← OrgC training issues
+logs/verify-server.log  ← hash verification issues
+logs/dashboard.log      ← frontend serving issues
+</pre>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<hr class="divider"/>
+<h2>Part 6 — Key concepts to know for the viva</h2>
+
+<h3>Why does raw data never leave the node?</h3>
+<p>
+  Because the Flower framework only calls two methods that communicate with the server:
+  <code>get_parameters()</code> and <code>fit()</code>. Neither of these return anything
+  except model weights and a sample count. The raw data arrays (<code>X_train</code>,
+  <code>y_train</code>) are stored as instance variables of the client class and never
+  passed to any method that Flower can access.
+</p>
+
+<h3>What is a weight hash and why does it prove anything?</h3>
+<p>
+  SHA-256 is a one-way function. Given the same input, it always produces the same 256-bit
+  output. Given a different input (even one number changed by 0.0001), it produces a completely
+  different output. So if you compute SHA-256 of the weights you received and it matches what
+  is on the blockchain, the weights were not modified between the server computing them and
+  you receiving them.
+</p>
+
+<h3>Why use a blockchain instead of just a database?</h3>
+<p>
+  A database can be edited or deleted by whoever controls it. A blockchain record cannot be
+  changed without changing every block that came after it, which would require redoing more
+  computational work than the entire network has done — computationally infeasible. The
+  blockchain's immutability is what gives the audit trail its value.
+</p>
+
+<h3>What is Hardhat and is this a real blockchain?</h3>
+<p>
+  Hardhat is a development tool that simulates an Ethereum blockchain locally. It behaves
+  exactly like the real Ethereum network in terms of how smart contracts work, how transactions
+  are mined, and how web3.py communicates with it — but it runs on your computer, costs
+  nothing, and resets when you restart it. For a production system you would deploy the same
+  smart contract to the real Ethereum network or a public testnet. The code would not change.
+</p>
+
+<h3>What is FedAvg and why is it weighted?</h3>
+<p>
+  Federated Averaging (McMahan et al., 2017) combines local models by averaging their weights,
+  weighted by the number of samples each node trained on. A node that trained on 100 samples
+  should have twice the influence on the global model as a node that trained on 50. In our
+  project all three nodes have 50 samples each, so the weights are equal (1/3 each). If you
+  ran with the <code>--dataset digits</code> flag on an unequal split, the weighting would
+  become meaningful.
+</p>
+
+</body>
+</html>
