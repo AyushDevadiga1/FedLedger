@@ -220,7 +220,7 @@ def main():
     # 2. Hardhat node
     print('[2/8] Starting Hardhat local Ethereum node…')
     procs.append(spawn([NPX, 'hardhat', 'node'], cwd=BC, name='hardhat'))
-    if not wait_for_port(8545, timeout=30):
+    if not wait_for_port(8545, timeout=60):
         print('  ✗ Hardhat node did not open :8545')
         shutdown()
     print('  ✓ node up')
@@ -259,7 +259,7 @@ def main():
     # below start first, get connection-refused on :8080, and exit — so the
     # run looked alive (ports open, launcher idle) while no round ever
     # executed and round_results.json was never written.
-    if not wait_for_port(8080, timeout=45):
+    if not wait_for_port(8080, timeout=60):
         print('  ✗ Flower server did not open :8080 — see logs/fl-server.log')
         shutdown()
     print('  ✓ Flower server listening on :8080')
@@ -278,7 +278,7 @@ def main():
     print('[7/8] Starting verify API server…')
     procs.append(spawn([PY, str(APP / 'verify_server.py')], cwd=ROOT, env=py_env,
                        name='verify'))
-    if not wait_for_port(8088, timeout=15):
+    if not wait_for_port(8088, timeout=30):
         print('  ✗ verify server did not open :8088 — see logs/verify.log')
 
     # 10. Open dashboard
